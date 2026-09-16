@@ -483,13 +483,30 @@ export default function TryOnStudioPage() {
                       <img src={capturedImageUrl} alt="Original" className="rounded-xl" />
                     )}
                   </div>
-                  <div className="flex items-center justify-center rounded-xl border border-dashed border-neutral-300 p-6 text-xs text-neutral-400 dark:border-neutral-700">
-                    Result unavailable — engine not implemented yet
+                  <div>
+                    <p className="mb-2 text-xs uppercase text-neutral-400">Try-on result</p>
+                    {resultImageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={resultImageUrl} alt="Try-on result" className="rounded-xl" />
+                    ) : (
+                      <div className="flex h-full min-h-[160px] items-center justify-center rounded-xl border border-dashed border-neutral-300 p-6 text-xs text-neutral-400 dark:border-neutral-700">
+                        Result unavailable
+                      </div>
+                    )}
                   </div>
                 </div>
-                <Button variant="ghost" onClick={reset}>
-                  Start over
-                </Button>
+                <p className="max-w-sm text-xs text-neutral-400">
+                  Geometry-based placement (Milestone 4) — not a photorealistic
+                  AI-generated render.
+                </p>
+                <div className="flex flex-wrap justify-center gap-3">
+                  <Button variant="secondary" onClick={() => useTryOnStore.setState({ state: "result" })}>
+                    Back
+                  </Button>
+                  <Button variant="ghost" onClick={reset}>
+                    Start over
+                  </Button>
+                </div>
               </>
             )}
           </CardContent>
