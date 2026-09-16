@@ -18,10 +18,19 @@ original pick) is blocked in this sandbox (huggingface.co returns 403); backgrou
 removal actually runs on `rembg`/U-2-Net (MIT/Apache-2.0), a real, license-verified
 substitute — see `ai/models/LICENSES.md` and the verification doc for the full account.
 
-**Milestone 3 — User Image Pipeline.** Camera capture + upload in the frontend, upload validation
-(format/size/resolution/corruption/orientation/EXIF-strip), MediaPipe face/hand/pose landmark
-integration, segmentation integration. Verified by: given a test photo, the API returns landmark
-coordinates and segmentation masks with measurable confidence scores.
+**Milestone 3 — User Image Pipeline (completed — see `docs/milestone-3-verification.md`).**
+Camera capture + upload in the frontend, upload validation (format/size/resolution/corruption/
+orientation/EXIF-strip), face/hand/pose landmark integration, segmentation integration, category-
+aware readiness. Verified by: given a test photo, the API returns landmark/segmentation results
+with real confidence scores and category-aware readiness, run end-to-end against a real
+(natively-run) Postgres/Redis/object-storage stack plus 127 backend/AI/worker tests and 32
+frontend tests. Note: MediaPipe's Tasks API (the originally researched pick) is blocked in this
+sandbox — its `.task` model weights are fetched from `storage.googleapis.com`, which returns 403.
+The real substitute used is the same `mediapipe` package's older Solutions API, whose weights are
+bundled directly in the pip wheel (`mediapipe==0.10.9`) — real Google-published inference, not a
+heuristic — with one honest limitation: only a binary person mask is available (the multiclass
+hair/skin/clothing segmenter is Tasks-API-only and remains blocked). See
+`ai/models/LICENSES.md` and the verification doc for the full account.
 
 **Milestone 4 — Basic (Geometry) Try-On.** `GeometryTryOnEngine` implemented for at least earrings
 and necklaces: anchor computation, scale/rotation from landmarks, warp + composite. Verified against

@@ -4,7 +4,7 @@ A production-oriented web platform for photorealistic virtual jewellery try-on: 
 customer photographs or uploads a picture of themselves, browses a jewellery catalogue,
 and sees the *actual* selected piece placed on their photo.
 
-**Current milestone: Milestone 1 — Platform Foundation.** See [Current status](#current-status)
+**Current milestone: Milestone 3 — User Image Pipeline.** See [Current status](#current-status)
 below for exactly what is and is not implemented yet.
 
 ## Architecture at a glance
@@ -148,8 +148,35 @@ verification account):**
 - 76 backend/AI/worker pytest tests and 27 frontend Vitest tests, all passing; ESLint
   clean; production frontend build succeeds
 
+**Implemented (Milestone 3 — user image pipeline, see
+[`docs/milestone-3-verification.md`](docs/milestone-3-verification.md) for the full
+verification account):**
+- Guest-or-authenticated try-on sessions (`tryon_sessions`), private user-photo upload
+  with real content-based validation, EXIF strip/orientation-normalize, and basic
+  quality checks (blur/brightness/resolution) — all reusing/extending Milestone 1-2's
+  validation and storage primitives, never a public URL
+- Async worker pipeline (`workers/tasks/process_tryon_request.py`): face landmarks +
+  ear-region heuristic, hand landmarks, pose/shoulder landmarks, person segmentation,
+  and category-aware readiness (`FACE_READY`/`EARS_READY`/`NECK_READY`/`HANDS_READY`),
+  each backed by real MediaPipe inference (see note below) with an honest low-confidence/
+  not-detected state whenever a real result isn't reliable — never a fabricated one
+- New, additive Alembic migration (`20260918_0003`) adding `tryon_sessions`,
+  `user_images`, `tryon_requests` — the Milestone 1/2 migrations are untouched
+- `/api/v1/tryon/*` endpoints for session/image/request creation, status polling, and
+  landmark/segmentation retrieval (signed URLs only), with authorization preventing
+  cross-session access
+- Try-On Studio frontend: camera capture with review (Retake/"Use this photo", no
+  auto-submit), lightweight photo guidance, real backend-status labels during
+  analysis, and category-aware readiness display — no fake progress percentages
+- 127 backend/AI/worker pytest tests and 32 frontend Vitest tests, all passing;
+  10-scenario real-world evaluation dataset + script with honestly-reported results
+  (`evaluation/`)
+- **Model note:** MediaPipe's Tasks API is blocked in this sandbox (same
+  `storage.googleapis.com` 403 pattern as Docker/SAM2); real MediaPipe inference is
+  still used via the older Solutions API, whose weights ship inside the pip wheel
+  (`mediapipe==0.10.9`) — see `ai/models/LICENSES.md` and the verification doc
+
 **Planned, not implemented yet:**
-- Real user-photo upload/validation pipeline, landmark/segmentation integration (Milestone 3)
 - Geometry try-on engine (Milestone 4)
 - Additional categories + generative-AI evaluation gate (Milestone 5)
 - Occlusion/shadow quality pass (Milestone 6)
@@ -161,6 +188,9 @@ verification account):**
   machine with normal internet access before relying on it.
 - SAM2 is not integrated (see above) — `rembg`/U-2-Net is a real, working substitute,
   not the originally-selected model.
+- MediaPipe's Tasks API is not integrated (see Milestone 3 note above) — the Solutions
+  API is a real, working substitute, but only produces a binary person segmentation
+  mask (no separate hair/skin/clothing sub-masks).
 - The admin catalogue UI's session is in-memory only (a page refresh logs the admin
   out) — a deliberate, minimal-scope decision for Milestone 2, not a bug.
 - Google Fonts (`next/font/google`) could not be used for the same registry/egress

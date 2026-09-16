@@ -126,6 +126,26 @@ self-service registration endpoint by design — see Milestone 2's narrow auth s
 python scripts/seed_admin.py --email admin@example.com --password 'your-password-here'
 ```
 
+## How Milestone 3 was verified
+
+See [`docs/milestone-3-verification.md`](milestone-3-verification.md) for the complete,
+itemized account: the additive `tryon_sessions`/`user_images`/`tryon_requests`
+migration, 127 backend/AI/worker pytest tests + 32 frontend Vitest tests all passing,
+the real MediaPipe-Solutions-API substitution for the Tasks-API models blocked by this
+sandbox's network policy, and honest, actually-run results for all 10 of the spec's
+"critical real-world testing" scenarios (including where hand/pose detection correctly
+did not fire on the synthetic test images).
+
+To run the same native-process verification used for this milestone (in addition to
+the Postgres/Redis/moto-server setup above):
+```bash
+pip install -r workers/requirements.txt   # pins mediapipe==0.10.9, protobuf==3.20.3
+alembic -c apps/api/alembic.ini upgrade head   # applies 20260918_0003 on top of 0002
+python evaluation/scripts/generate_synthetic_dataset.py   # (re)generates evaluation/users/*
+python evaluation/scripts/run_scenario_evaluation.py      # prints real, live detection results
+pytest ai/tests apps/api/tests workers/tests -q
+```
+
 ## Known limitations
 
 - Google Fonts (`next/font/google`) could not be fetched in the build sandbox for the
@@ -135,5 +155,14 @@ python scripts/seed_admin.py --email admin@example.com --password 'your-password
 - SAM2 (Milestone 0's pick for catalogue background removal) is blocked in this sandbox
   (huggingface.co returns 403) — Milestone 2 ships a real, license-verified substitute
   (`rembg`/U-2-Net) instead. See `docs/milestone-2-verification.md` §7.
-- No Milestone 3+ code exists yet (user-photo landmarks/segmentation, geometry engine,
-  virtual try-on rendering) — see `docs/roadmap.md` for what ships in which milestone.
+- MediaPipe's Tasks API (Face/Hand/Pose Landmarker, Multiclass Selfie Segmenter) is
+  blocked in this sandbox for the same egress reason as Docker/SAM2 (its `.task` model
+  weights are fetched from `storage.googleapis.com`, which returns 403). Milestone 3
+  uses the same `mediapipe` package's older Solutions API instead, whose weights are
+  bundled in the pip wheel — real inference, not a heuristic — pinned at
+  `mediapipe==0.10.9`. See `docs/milestone-3-verification.md` §2 for the full account.
+  One real gap remains: only a binary person segmentation mask is available (no
+  separate hair/skin/clothing sub-masks), since the model that would provide those is
+  Tasks-API-only.
+- No Milestone 4+ code exists yet (geometry try-on engine, jewellery placement,
+  rendering) — see `docs/roadmap.md` for what ships in which milestone.
