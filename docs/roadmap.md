@@ -8,10 +8,15 @@ Postgres + Alembic baseline migration, Redis, MinIO, docker-compose (ports per a
 env config, structured logging, `/health` + `/ready`. No jewellery logic yet — this is pure
 plumbing, verified by: all containers start clean on a fresh machine via `docker compose up`.
 
-**Milestone 2 — Jewellery Catalogue.** Categories + jewellery CRUD, admin asset upload endpoint,
-asset-processing pipeline (background removal via SAM2, thumbnailing, metadata capture), minimal
-admin UI to manage catalogue. Verified by: an admin can upload a jewellery photo and see a
-transparent cutout + thumbnail + metadata generated automatically.
+**Milestone 2 — Jewellery Catalogue (completed — see `docs/milestone-2-verification.md`).**
+Categories + jewellery CRUD, admin asset upload endpoint, asset-processing pipeline
+(background removal, thumbnailing, metadata capture), minimal admin UI to manage
+catalogue. Verified by: an admin can upload a jewellery photo and see a transparent
+cutout + thumbnail + metadata generated automatically — confirmed end-to-end against a
+real (natively-run) Postgres/Redis/object-storage stack. Note: SAM2 (this document's
+original pick) is blocked in this sandbox (huggingface.co returns 403); background
+removal actually runs on `rembg`/U-2-Net (MIT/Apache-2.0), a real, license-verified
+substitute — see `ai/models/LICENSES.md` and the verification doc for the full account.
 
 **Milestone 3 — User Image Pipeline.** Camera capture + upload in the frontend, upload validation
 (format/size/resolution/corruption/orientation/EXIF-strip), MediaPipe face/hand/pose landmark

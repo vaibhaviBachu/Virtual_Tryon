@@ -110,11 +110,30 @@ Dockerfiles install the same package versions pinned in `requirements.txt`/
 `package.json`, but this is the one claim in this document that rests on the compose
 file being correct rather than on a direct test run).
 
+## How Milestone 2 was verified
+
+See [`docs/milestone-2-verification.md`](milestone-2-verification.md) for the complete,
+itemized account (migration, 76 backend tests, 27 frontend tests, a real bug found and
+fixed, and an honest account of SAM2 being blocked in this sandbox). The short version:
+the same native-process strategy as Milestone 1, plus `moto_server` (a pure-Python
+S3-API-compatible mock, run with `moto_server -p 2005`) standing in for MinIO, since
+MinIO's own binary download is blocked by the same registry-style egress rule that
+blocks Docker Hub.
+
+To create an admin account for testing the `/admin/catalogue` UI (there is no
+self-service registration endpoint by design — see Milestone 2's narrow auth scope):
+```bash
+python scripts/seed_admin.py --email admin@example.com --password 'your-password-here'
+```
+
 ## Known limitations
 
 - Google Fonts (`next/font/google`) could not be fetched in the build sandbox for the
   same egress reason as the Docker registries; `apps/web` currently uses a system font
   stack (see `apps/web/src/app/globals.css`). This is a Milestone 7 branding-pass item,
   not a functional gap.
-- No jewellery-specific code exists yet (catalogue, engines, landmarks) — see
-  `docs/roadmap.md` for what ships in which milestone.
+- SAM2 (Milestone 0's pick for catalogue background removal) is blocked in this sandbox
+  (huggingface.co returns 403) — Milestone 2 ships a real, license-verified substitute
+  (`rembg`/U-2-Net) instead. See `docs/milestone-2-verification.md` §7.
+- No Milestone 3+ code exists yet (user-photo landmarks/segmentation, geometry engine,
+  virtual try-on rendering) — see `docs/roadmap.md` for what ships in which milestone.

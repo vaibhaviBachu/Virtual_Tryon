@@ -107,14 +107,13 @@ See [`docs/development.md`](docs/development.md) for the full development workfl
 
 ## Current status
 
-**Implemented (Milestone 1):**
+**Implemented (Milestone 1 — platform foundation):**
 - Monorepo scaffold matching `docs/architecture.md`
 - FastAPI app with structured JSON logging, request-ID propagation, centralized error
   handling, CORS, `/health` (liveness) and `/ready` (Postgres + Redis + object storage
   checks)
-- SQLAlchemy + Alembic wired to Postgres with a baseline migration (no application
-  tables yet — that's Milestone 2)
-- Redis client wrapper (infrastructure only — no queue/rate-limit logic yet)
+- SQLAlchemy + Alembic wired to Postgres with a baseline migration
+- Redis client wrapper
 - S3-compatible object storage abstraction (works against MinIO or real S3/R2 unmodified)
 - Independent worker process with a Redis-backed heartbeat and its own `/health`/`/ready`
 - `TryOnEngine` abstraction + registry with a `NotImplementedEngine` placeholder that
@@ -123,20 +122,47 @@ See [`docs/development.md`](docs/development.md) for the full development workfl
 - Next.js frontend: landing page, Try-On Studio state machine (placeholder data, real
   camera capture component with upload fallback), admin shell
 - Docker Compose definition for all 6 services with health checks and persistent volumes
-- Backend/AI/worker pytest suite (21 tests) and frontend Vitest suite (5 tests), all
-  passing; ESLint clean; production frontend build succeeds
+
+**Implemented (Milestone 2 — jewellery catalogue, see
+[`docs/milestone-2-verification.md`](docs/milestone-2-verification.md) for the full
+verification account):**
+- Database-driven jewellery categories (9 seeded) + jewellery CRUD with physical
+  dimension fields (`physical_width_mm`/`height_mm`/`depth_mm`/`weight_g`)
+- `JewelleryAsset` model (original/processed/thumbnail variants) storing only
+  object-storage keys and metadata, never binary data
+- Admin-only asset upload: real content-based MIME sniffing, size/dimension limits,
+  corrupt-image detection, EXIF stripping, orientation normalization
+- Async background-removal + transparent-cutout + thumbnail pipeline running in the
+  worker process via a minimal Redis job queue (`jobqueue/`) — never synchronously in
+  the API request
+- Background removal via `rembg`/U-2-Net (MIT/Apache-2.0) — a real, license-verified
+  substitute for SAM2, which is blocked in this sandbox (huggingface.co returns 403;
+  see `ai/models/LICENSES.md`)
+- JWT-based admin authorization (`require_admin`) on every mutation endpoint, reusing
+  Milestone 1's security primitives — no second auth system
+- `/admin/catalogue` UI: category management, jewellery list with search/filter/
+  pagination, creation form, detail page with original/processed/thumbnail preview on a
+  checkerboard background showing real processing status (no fake progress bars)
+- New, additive, reversible Alembic migration (`20260917_0002`) that does not modify the
+  Milestone 1 baseline
+- 76 backend/AI/worker pytest tests and 27 frontend Vitest tests, all passing; ESLint
+  clean; production frontend build succeeds
 
 **Planned, not implemented yet:**
-- Jewellery catalogue, asset upload/processing (Milestone 2)
-- Real image upload/validation pipeline, landmark/segmentation integration (Milestone 3)
+- Real user-photo upload/validation pipeline, landmark/segmentation integration (Milestone 3)
 - Geometry try-on engine (Milestone 4)
 - Additional categories + generative-AI evaluation gate (Milestone 5)
 - Occlusion/shadow quality pass (Milestone 6)
-- Full auth enforcement, rate limiting, retention policies, CI/CD (Milestone 7)
+- Full auth enforcement (registration, refresh tokens, persisted sessions), rate
+  limiting, retention policies, CI/CD (Milestone 7)
 
 **Known issues:**
 - `docker compose build`/`up` unverified in this sandbox (see above) — verify on a
   machine with normal internet access before relying on it.
+- SAM2 is not integrated (see above) — `rembg`/U-2-Net is a real, working substitute,
+  not the originally-selected model.
+- The admin catalogue UI's session is in-memory only (a page refresh logs the admin
+  out) — a deliberate, minimal-scope decision for Milestone 2, not a bug.
 - Google Fonts (`next/font/google`) could not be used for the same registry/egress
   reason and was replaced with a system font stack; revisit with self-hosted webfonts
   during the Milestone 7 branding pass if a custom typeface is wanted.
