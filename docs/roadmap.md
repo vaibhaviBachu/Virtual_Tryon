@@ -32,9 +32,10 @@ heuristic — with one honest limitation: only a binary person mask is available
 hair/skin/clothing segmenter is Tasks-API-only and remains blocked). See
 `ai/models/LICENSES.md` and the verification doc for the full account.
 
-**Milestone 4 — Basic (Geometry) Try-On.** `GeometryTryOnEngine` implemented for at least earrings
-and necklaces: anchor computation, scale/rotation from landmarks, warp + composite. Verified against
-the `evaluation/` dataset with tracked scale-error and placement-error metrics, not eyeballing.
+**Milestone 4 — Basic (Geometry) Try-On (completed — see `docs/milestone-4-verification.md`).**
+`GeometryTryOnEngine` implemented for earrings and necklace: anchor computation, scale/rotation
+from real landmarks, warp + composite. Verified against the `evaluation/` dataset with tracked
+scale-error and placement-error metrics, not eyeballing.
 
 **Milestone 5 — Expand Categories + Evaluation-Driven Model Decision.** Add bangles, bracelets,
 rings, maang tikka, nose rings, jewellery sets to the geometry engine. Run the evaluation harness

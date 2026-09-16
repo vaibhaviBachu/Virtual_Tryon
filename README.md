@@ -4,7 +4,7 @@ A production-oriented web platform for photorealistic virtual jewellery try-on: 
 customer photographs or uploads a picture of themselves, browses a jewellery catalogue,
 and sees the *actual* selected piece placed on their photo.
 
-**Current milestone: Milestone 3 — User Image Pipeline.** See [Current status](#current-status)
+**Current milestone: Milestone 4 — Basic (Geometry) Try-On.** See [Current status](#current-status)
 below for exactly what is and is not implemented yet.
 
 ## Architecture at a glance
@@ -176,8 +176,33 @@ verification account):**
   still used via the older Solutions API, whose weights ship inside the pip wheel
   (`mediapipe==0.10.9`) — see `ai/models/LICENSES.md` and the verification doc
 
+**Implemented (Milestone 4 — basic geometry try-on, see
+[`docs/milestone-4-verification.md`](docs/milestone-4-verification.md) for the full
+verification account):**
+- `GeometryTryOnEngine` for earrings and necklace: mathematically-defined anchor point
+  (real face/pose landmarks) + documented scale + capped rotation + affine warp + true
+  alpha compositing — no generative AI, no diffusion, no learned rendering model
+- Catalogue asset metadata extended (`anchor_x`/`anchor_y`/`attachment_point`/
+  `mirrorable`) and asset geometry always derived from the asset's real alpha bounding
+  box, never the raw image rectangle
+- Documented, configurable scaling with an honest physical-scale limitation
+  (anthropometric calibration constants, not a per-user measurement) and safety clamps
+  so a noisy landmark can never produce a nonsensical scale/rotation
+- New, additive Alembic migration (`20260919_0004`) adding `tryon_renders` and the new
+  asset columns — the Milestone 1-3 tables are untouched
+- Async render pipeline (`POST /requests/{id}/render`, `GET /renders/{id}`) reusing
+  Milestone 3's readiness gating and session/user authorization, with a `blocked` status
+  distinct from `failed` for correctly-enforced preconditions (e.g. "ears not visible")
+- Internal-only debug visualization endpoint (`GET /renders/{id}/debug`), never linked
+  from the customer-facing UI
+- Try-On Studio frontend wired to real categories/items/render/result, with an honest
+  "not a photorealistic render" disclaimer during processing
+- Real evaluation harness (`python -m evaluation.run_geometry`) reporting placement/
+  scale/rotation error against by-hand-computed expected values (not the implementation
+  grading itself) plus a real-image readiness/render agreement-rate check
+- 191 backend/AI/worker pytest tests and 39 frontend Vitest tests, all passing
+
 **Planned, not implemented yet:**
-- Geometry try-on engine (Milestone 4)
 - Additional categories + generative-AI evaluation gate (Milestone 5)
 - Occlusion/shadow quality pass (Milestone 6)
 - Full auth enforcement (registration, refresh tokens, persisted sessions), rate
@@ -196,3 +221,9 @@ verification account):**
 - Google Fonts (`next/font/google`) could not be used for the same registry/egress
   reason and was replaced with a system font stack; revisit with self-hosted webfonts
   during the Milestone 7 branding pass if a custom typeface is wanted.
+- Milestone 4's jewellery placement uses a documented anthropometric average for
+  physical scale (a single 2D photo has no metric depth reference) and in-plane-only
+  rotation (no 3D head-pose correction) — see `docs/milestone-4-verification.md` §6-7.
+- `ENABLE_TRYON_DEBUG_VIZ` defaults on in this development config; set it `false` in a
+  production environment (the debug endpoint is never linked from the customer UI
+  regardless).

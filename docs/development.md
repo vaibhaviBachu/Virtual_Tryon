@@ -146,6 +146,23 @@ python evaluation/scripts/run_scenario_evaluation.py      # prints real, live de
 pytest ai/tests apps/api/tests workers/tests -q
 ```
 
+## How Milestone 4 was verified
+
+See [`docs/milestone-4-verification.md`](milestone-4-verification.md) for the complete,
+itemized account: the additive `20260919_0004` migration (new asset anchor columns +
+`tryon_renders`), the pure-math `ai/geometry/` layer with independently-computed
+expected values, 191 backend/AI/worker pytest tests + 39 frontend Vitest tests all
+passing, and the real evaluation harness results (synthetic placement/scale/rotation
+error at floating-point-noise scale, 24/24 real-image readiness/render agreement).
+
+To run the same native-process verification used for this milestone (in addition to
+the Postgres/Redis/moto-server setup above):
+```bash
+python -m alembic -c apps/api/alembic.ini upgrade head   # applies 20260919_0004 on top of 0003
+python -m evaluation.run_geometry                        # prints real placement/scale/rotation error + agreement rate
+pytest ai/tests apps/api/tests workers/tests -q
+```
+
 ## Known limitations
 
 - Google Fonts (`next/font/google`) could not be fetched in the build sandbox for the
@@ -164,5 +181,9 @@ pytest ai/tests apps/api/tests workers/tests -q
   One real gap remains: only a binary person segmentation mask is available (no
   separate hair/skin/clothing sub-masks), since the model that would provide those is
   Tasks-API-only.
-- No Milestone 4+ code exists yet (geometry try-on engine, jewellery placement,
-  rendering) — see `docs/roadmap.md` for what ships in which milestone.
+- Milestone 4's geometry try-on uses a documented anthropometric-average physical scale
+  (a single 2D photo has no metric depth reference) and in-plane-only rotation (no 3D
+  head-pose correction) — see `docs/milestone-4-verification.md` §6-7 for the full
+  account.
+- No Milestone 5+ code exists yet (additional categories, generative-AI evaluation
+  gate, occlusion/shadow) — see `docs/roadmap.md` for what ships in which milestone.
