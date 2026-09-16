@@ -5,6 +5,29 @@ Works unmodified against MinIO (local dev), AWS S3, and Cloudflare R2 (productio
 only the endpoint/credentials passed in change between environments. This class takes
 no dependency on either apps.api or workers config — each caller's own settings module
 constructs it (see apps/api/storage/s3_storage.py and workers/storage.py).
+
+INTERNAL vs PUBLIC ENDPOINT (fixed as a real bug found during Milestone 4 runtime
+verification on a real Docker Compose deployment — not a hypothetical): `upload`/
+`download`/`delete`/`exists`/`ping` always run inside a container (apps/api or
+workers), so they correctly use the Docker-internal service hostname (e.g.
+`minio:9000`, only resolvable on the compose network). But `create_signed_url()`
+produces a URL that is handed to the FRONTEND and opened directly by the user's
+BROWSER — a process running on the host machine, which cannot resolve `minio` at all.
+Signing a URL against the internal endpoint therefore produced a browser-unreachable
+`http://minio:9000/...` link that always failed with a broken-image icon, even though
+the object itself was uploaded and retrievable correctly from inside the containers.
+
+The fix: an optional, separate `public_endpoint` (defaulting to `endpoint` when not
+given, so single-process/native-process/test setups where there is no internal/
+external split are unaffected). Presigned URLs are generated with a second boto3
+client pointed at the public endpoint. This works because an S3 SigV4 presigned URL's
+signature is computed over the bucket/key/expiry/host header, not validated against
+"the process that generated it" — MinIO (and S3/R2) accept a request whose Host header
+matches the endpoint the signature was computed for, regardless of which client
+process created that signature, as long as both endpoints route to the same underlying
+storage instance (true here: the internal `minio:9000` and the public
+`localhost:2005` are the same MinIO container, just reached via two different
+network paths — the Docker-internal DNS name vs. the host-mapped port).
 """
 import io
 import logging
@@ -28,6 +51,8 @@ class S3CompatibleStorage(ObjectStorage):
         secret_key: str,
         bucket: str,
         secure: bool = False,
+        public_endpoint: str | None = None,
+        public_secure: bool | None = None,
     ) -> None:
         self._bucket = bucket
         scheme = "https" if secure else "http"
@@ -38,6 +63,23 @@ class S3CompatibleStorage(ObjectStorage):
             aws_secret_access_key=secret_key,
             config=BotoConfig(signature_version="s3v4"),
         )
+
+        # Only build a second client when a genuinely different public endpoint is
+        # configured — most callers (tests, native-process dev, anything without a
+        # container/host network split) have none, and should keep signing against the
+        # same client/endpoint as before this fix.
+        if public_endpoint and public_endpoint != endpoint:
+            public_scheme = "https" if (secure if public_secure is None else public_secure) else "http"
+            self._presign_client = boto3.client(
+                "s3",
+                endpoint_url=f"{public_scheme}://{public_endpoint}",
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                config=BotoConfig(signature_version="s3v4"),
+            )
+        else:
+            self._presign_client = self._client
+
         self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self) -> None:
@@ -69,7 +111,7 @@ class S3CompatibleStorage(ObjectStorage):
             return False
 
     def create_signed_url(self, key: str, expires_in: timedelta = timedelta(minutes=15)) -> str:
-        return self._client.generate_presigned_url(
+        return self._presign_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self._bucket, "Key": key},
             ExpiresIn=int(expires_in.total_seconds()),

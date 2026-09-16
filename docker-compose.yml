@@ -68,6 +68,11 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-jewellery-tryon}
       MINIO_SECURE: ${MINIO_SECURE:-false}
+      # MINIO_ENDPOINT above (minio:9000) is only reachable on the compose network —
+      # signed URLs returned to the browser must instead point at the host-mapped
+      # MinIO port. See storage/s3_storage.py and apps/api/core/config.py for why.
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:2005}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-every-non-local-environment}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:2001}
     ports:

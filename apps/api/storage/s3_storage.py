@@ -21,4 +21,9 @@ def get_object_storage() -> ObjectStorage:
         secret_key=settings.MINIO_SECRET_KEY,
         bucket=settings.MINIO_BUCKET,
         secure=settings.MINIO_SECURE,
+        # See MINIO_PUBLIC_ENDPOINT's docstring in apps/api/core/config.py and
+        # storage/s3_storage.py's module docstring — this is what makes signed URLs
+        # returned to the browser actually resolvable from the browser.
+        public_endpoint=settings.MINIO_PUBLIC_ENDPOINT or None,
+        public_secure=settings.MINIO_PUBLIC_SECURE,
     )

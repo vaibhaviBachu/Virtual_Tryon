@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str = Field(default="minioadmin")
     MINIO_BUCKET: str = Field(default="jewellery-tryon")
     MINIO_SECURE: bool = Field(default=False)
+    # Host used ONLY when signing a URL handed back to the browser (asset previews,
+    # try-on results, segmentation/debug images) — MINIO_ENDPOINT above is the
+    # Docker-internal hostname (`minio:9000`) apps/api itself uses to reach storage,
+    # which the user's browser cannot resolve. Defaults to MINIO_ENDPOINT so native/
+    # single-process/test setups (no internal-vs-host split) are unaffected; Docker
+    # Compose overrides this to the host-mapped MinIO port (see docker-compose.yml).
+    # See storage/s3_storage.py's module docstring for the full root-cause writeup.
+    MINIO_PUBLIC_ENDPOINT: str = Field(default="")
+    MINIO_PUBLIC_SECURE: bool = Field(default=False)
 
     # --- JWT / auth (architecture ready; not enforced on any route in Milestone 1) ---
     JWT_SECRET_KEY: str = Field(default="change-me-in-every-non-local-environment")
