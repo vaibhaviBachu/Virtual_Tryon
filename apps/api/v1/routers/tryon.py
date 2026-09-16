@@ -20,19 +20,24 @@ from sqlalchemy.orm import Session
 
 from ai.preprocessing.image_validation import ImageValidationError
 from apps.api.core.auth_deps import get_current_user_optional
+from apps.api.core.config import get_settings
 from apps.api.core.redis_client import get_redis_client
 from apps.api.db.session import get_db
 from apps.api.v1.schemas.tryon import (
+    CategoryOptionResponse,
     LandmarksResponse,
     SegmentationResponse,
     SessionCreateRequest,
     SessionResponse,
+    TryOnRenderCreateRequest,
+    TryOnRenderDebugResponse,
+    TryOnRenderResponse,
     TryOnRequestCreateRequest,
     TryOnRequestResponse,
     UserImageResponse,
 )
 from apps.api.v1.services import tryon_service
-from db.models import User
+from db.models import TryOnRender, User
 
 logger = logging.getLogger("app.tryon_router")
 router = APIRouter(prefix="/api/v1/tryon", tags=["tryon"])
@@ -148,3 +153,100 @@ def get_segmentation(
         raise _forbidden("You do not have access to this request.")
     preview_url = tryon_service.get_segmentation_preview_url(request)
     return SegmentationResponse(segmentation_summary=request.segmentation_summary, mask_preview_url=preview_url)
+
+
+# --- Milestone 4: geometry try-on rendering ---
+
+
+@router.get("/categories", response_model=list[CategoryOptionResponse])
+def list_categories(db: Session = Depends(get_db)) -> list[CategoryOptionResponse]:
+    """Spec §26: real backend category data with a `functional` flag — the frontend
+    must never hard-code which categories can actually render."""
+    return [CategoryOptionResponse(**c) for c in tryon_service.list_functional_categories(db)]
+
+
+def _to_render_response(render: TryOnRender) -> TryOnRenderResponse:
+    return TryOnRenderResponse(
+        id=render.id,
+        request_id=render.request_id,
+        jewellery_id=render.jewellery_id,
+        asset_id=render.asset_id,
+        category_slug=render.category_slug,
+        status=render.status.value if hasattr(render.status, "value") else render.status,
+        error_code=render.error_code,
+        error_message=render.error_message,
+        result_image_url=tryon_service.get_render_result_url(render),
+        created_at=render.created_at,
+        queued_at=render.queued_at,
+        started_at=render.started_at,
+        completed_at=render.completed_at,
+    )
+
+
+@router.post(
+    "/requests/{request_id}/render",
+    response_model=TryOnRenderResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_render(
+    request_id: UUID,
+    payload: TryOnRenderCreateRequest,
+    db: Session = Depends(get_db),
+    redis_client: redis.Redis = Depends(get_redis_client),
+    current_user: User | None = Depends(get_current_user_optional),
+) -> TryOnRenderResponse:
+    """Spec §22-23: validate -> enqueue -> return render status. All geometry
+    calculation happens in the worker/ai layer, never here (spec §3)."""
+    try:
+        render = tryon_service.create_render(
+            db, redis_client, request_id, payload.jewellery_id, payload.asset_id, current_user
+        )
+    except tryon_service.TryOnRequestNotFoundError:
+        raise _not_found("Try-on request not found.")
+    except tryon_service.SessionAccessDeniedError:
+        raise _forbidden("You do not have access to this request.")
+    except tryon_service.JewelleryNotFoundError:
+        raise _not_found("Jewellery item not found.")
+    except tryon_service.RenderAssetNotFoundError:
+        raise _not_found("Jewellery asset not found for this item.")
+    return _to_render_response(render)
+
+
+@router.get("/renders/{render_id}", response_model=TryOnRenderResponse)
+def get_render(
+    render_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+) -> TryOnRenderResponse:
+    try:
+        render = tryon_service.get_render(db, render_id, current_user)
+    except tryon_service.RenderNotFoundError:
+        raise _not_found("Render not found.")
+    except tryon_service.SessionAccessDeniedError:
+        raise _forbidden("You do not have access to this render.")
+    return _to_render_response(render)
+
+
+@router.get("/renders/{render_id}/debug", response_model=TryOnRenderDebugResponse)
+def get_render_debug(
+    render_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+) -> TryOnRenderDebugResponse:
+    """Internal/developer-only placement visualization (spec §27) — gated by
+    Settings.ENABLE_TRYON_DEBUG_VIZ so it can be disabled entirely in a real production
+    deployment without touching this route's code. Deliberately returns 404 (not 403)
+    when disabled, so its existence isn't distinguishable from "no such render" to a
+    normal customer probing the API."""
+    if not get_settings().ENABLE_TRYON_DEBUG_VIZ:
+        raise _not_found("Not found.")
+    try:
+        render = tryon_service.get_render(db, render_id, current_user)
+    except tryon_service.RenderNotFoundError:
+        raise _not_found("Not found.")
+    except tryon_service.SessionAccessDeniedError:
+        raise _forbidden("You do not have access to this render.")
+    return TryOnRenderDebugResponse(
+        placement_metadata=render.placement_metadata,
+        debug_image_url=tryon_service.get_render_debug_url(render),
+    )

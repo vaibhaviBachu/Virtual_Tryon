@@ -35,7 +35,7 @@ from ai.geometry.transform import apply_transform, compute_transform, mirror_ass
 
 logger = logging.getLogger("ai.engines.geometry")
 
-SUPPORTED_CATEGORIES = {"earring", "necklace"}
+SUPPORTED_CATEGORIES = {"earrings", "necklace"}
 _EARRING_SIDES = ("left", "right")
 
 
@@ -159,8 +159,8 @@ class GeometryTryOnEngine(TryOnEngine):
             physical_height_mm=tryon_input.physical_height_mm,
         )
 
-        sides = _EARRING_SIDES if category_slug == "earring" and tryon_input.side in (None, "both") else (
-            (tryon_input.side,) if category_slug == "earring" else (None,)
+        sides = _EARRING_SIDES if category_slug == "earrings" and tryon_input.side in (None, "both") else (
+            (tryon_input.side,) if category_slug == "earrings" else (None,)
         )
 
         placements: List[PlacementRecord] = []
@@ -175,7 +175,7 @@ class GeometryTryOnEngine(TryOnEngine):
                 placements.append(PlacementRecord(side=side, anchor=anchor, scale=_null_scale(), rotation=_null_rotation(), transform=None))
                 continue
 
-            mirror_needed = category_slug == "earring" and side == "left" and base_asset_geometry.mirrorable
+            mirror_needed = category_slug == "earrings" and side == "left" and base_asset_geometry.mirrorable
             if mirror_needed:
                 asset_rgba_for_side, asset_geometry_for_side = mirror_asset_geometry(
                     tryon_input.jewellery_asset_rgba, base_asset_geometry

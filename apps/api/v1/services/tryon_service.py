@@ -17,7 +17,7 @@ guessing an ID"):
   subsequent call — `_authorize_session` enforces this for every read/write below.
 """
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -26,9 +26,26 @@ from sqlalchemy.orm import Session
 
 from ai.preprocessing.image_validation import ImageValidationError, validate_and_normalize_upload
 from apps.api.storage.s3_storage import get_object_storage
-from db.models import TryOnRequest, TryOnRequestStatus, TryOnSession, User, UserImage
-from jobqueue import TryOnRequestProcessingJob, enqueue_tryon_job
+from db.models import (
+    Jewellery,
+    JewelleryAsset,
+    JewelleryCategory,
+    TryOnRender,
+    TryOnRenderStatus,
+    TryOnRequest,
+    TryOnRequestStatus,
+    TryOnSession,
+    User,
+    UserImage,
+)
+from jobqueue import TryOnRenderJob, TryOnRequestProcessingJob, enqueue_render_job, enqueue_tryon_job
 from storage.keys import segmentation_mask_key, user_image_key
+
+# Spec §26: only these two categories render for real in Milestone 4. Deliberately a
+# plain set here (not a DB column) because "functional" is a property of THIS
+# milestone's engine capability, not of the catalogue data itself — a category row
+# does not change when Milestone 5 adds bangles, only this set does.
+FUNCTIONAL_CATEGORY_SLUGS = {"earrings", "necklace"}
 
 logger = logging.getLogger("app.tryon")
 
@@ -50,6 +67,18 @@ class UserImageNotFoundError(Exception):
 
 
 class TryOnRequestNotFoundError(Exception):
+    pass
+
+
+class JewelleryNotFoundError(Exception):
+    pass
+
+
+class RenderAssetNotFoundError(Exception):
+    pass
+
+
+class RenderNotFoundError(Exception):
     pass
 
 
@@ -142,8 +171,6 @@ def create_tryon_request(
     if image is None or image.session_id != session.id:
         raise UserImageNotFoundError(str(user_image_id))
 
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc)
     request = TryOnRequest(
         session_id=session.id,
@@ -178,6 +205,104 @@ def get_segmentation_preview_url(request: TryOnRequest) -> Optional[str]:
         return None
     storage = get_object_storage()
     return storage.create_signed_url(request.segmentation_mask_key, expires_in=SIGNED_URL_EXPIRY)
+
+
+# --- Milestone 4: geometry try-on rendering ---
+
+
+def list_functional_categories(db: Session) -> list[dict]:
+    """Spec §26: real category data, with `functional` telling the frontend which
+    categories should render for real vs. show disabled — never a hard-coded frontend
+    list that could drift from what the backend can actually process."""
+    categories = (
+        db.query(JewelleryCategory)
+        .filter(JewelleryCategory.is_active.is_(True))
+        .order_by(JewelleryCategory.name)
+        .all()
+    )
+    return [
+        {"slug": c.slug, "name": c.name, "functional": c.slug in FUNCTIONAL_CATEGORY_SLUGS}
+        for c in categories
+    ]
+
+
+def create_render(
+    db: Session,
+    redis_client: redis.Redis,
+    request_id: UUID,
+    jewellery_id: UUID,
+    asset_id: Optional[UUID],
+    current_user: Optional[User],
+) -> TryOnRender:
+    """Spec §22: the client only ever names a `request_id` (its own, already-authorized
+    photo analysis) and a `jewellery_id`/optional `asset_id` (catalogue IDs) — never a
+    raw storage path. `get_tryon_request` re-runs the same session-ownership check
+    every other tryon route uses, so a request belonging to a different session/user
+    cannot be rendered against."""
+    request = get_tryon_request(db, request_id, current_user)  # raises TryOnRequestNotFoundError/SessionAccessDeniedError
+
+    jewellery = db.get(Jewellery, jewellery_id)
+    if jewellery is None:
+        raise JewelleryNotFoundError(str(jewellery_id))
+
+    if asset_id is not None:
+        asset = db.get(JewelleryAsset, asset_id)
+        if asset is None or asset.jewellery_id != jewellery.id:
+            raise RenderAssetNotFoundError(str(asset_id))
+
+    now = datetime.now(timezone.utc)
+    render = TryOnRender(
+        request_id=request.id,
+        jewellery_id=jewellery.id,
+        asset_id=asset_id,
+        category_slug=jewellery.category.slug if jewellery.category else "unknown",
+        status=TryOnRenderStatus.queued,
+        queued_at=now,
+    )
+    db.add(render)
+    db.commit()
+    db.refresh(render)
+
+    job = TryOnRenderJob.create(render_id=str(render.id), request_id=str(request.id))
+    enqueue_render_job(redis_client, job)
+
+    logger.info(
+        "Created tryon render and enqueued processing",
+        extra={
+            "extra_fields": {
+                "render_id": str(render.id),
+                "request_id": str(request.id),
+                "jewellery_id": str(jewellery.id),
+                "job_id": job.job_id,
+            }
+        },
+    )
+    return render
+
+
+def get_render(db: Session, render_id: UUID, current_user: Optional[User]) -> TryOnRender:
+    render = db.get(TryOnRender, render_id)
+    if render is None:
+        raise RenderNotFoundError(str(render_id))
+    request = db.get(TryOnRequest, render.request_id)
+    if request is None:
+        raise RenderNotFoundError(str(render_id))
+    _authorize_session(db, request.session_id, current_user)  # raises if not the owner
+    return render
+
+
+def get_render_result_url(render: TryOnRender) -> Optional[str]:
+    if render.status != TryOnRenderStatus.ready or not render.result_storage_key:
+        return None
+    storage = get_object_storage()
+    return storage.create_signed_url(render.result_storage_key, expires_in=SIGNED_URL_EXPIRY)
+
+
+def get_render_debug_url(render: TryOnRender) -> Optional[str]:
+    if not render.debug_storage_key:
+        return None
+    storage = get_object_storage()
+    return storage.create_signed_url(render.debug_storage_key, expires_in=SIGNED_URL_EXPIRY)
 
 
 def _bytes_io(data: bytes):

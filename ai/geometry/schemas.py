@@ -124,7 +124,7 @@ class TryOnInput:
 
     user_image_rgb: Any  # np.ndarray, HxWx3 uint8
     jewellery_asset_rgba: Any  # np.ndarray, HxWx4 uint8 — the processed, transparent catalogue asset
-    category_slug: str  # "earring" | "necklace" (Milestone 4's only two functional categories, spec §26)
+    category_slug: str  # "earrings" | "necklace" (Milestone 4's only two functional categories, spec §26)
     side: Optional[str]  # "left" | "right" | "both" for earrings; None for necklace
     asset_anchor_x: Optional[float]
     asset_anchor_y: Optional[float]

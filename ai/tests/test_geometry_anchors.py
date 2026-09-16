@@ -34,7 +34,7 @@ def _face_with_ears(left_conf=0.8, right_conf=0.8) -> FaceLandmarkResult:
 
 def test_ear_anchor_applies_documented_vertical_offset():
     face = _face_with_ears()
-    result = compute_anchor("earring", "left", face, None, IMAGE_W, IMAGE_H)
+    result = compute_anchor("earrings", "left", face, None, IMAGE_W, IMAGE_H)
     assert result.success is True
     face_height_px = (0.8 - 0.2) * IMAGE_H
     expected_x = 0.3 * IMAGE_W
@@ -45,20 +45,20 @@ def test_ear_anchor_applies_documented_vertical_offset():
 
 def test_ear_anchor_reference_measurement_is_face_bbox_width_px():
     face = _face_with_ears()
-    result = compute_anchor("earring", "right", face, None, IMAGE_W, IMAGE_H)
+    result = compute_anchor("earrings", "right", face, None, IMAGE_W, IMAGE_H)
     expected_face_width_px = (0.7 - 0.3) * IMAGE_W
     assert result.reference_measurement_px == pytest.approx(expected_face_width_px)
 
 
 def test_ear_anchor_fails_with_structured_code_when_no_face():
-    result = compute_anchor("earring", "left", None, None, IMAGE_W, IMAGE_H)
+    result = compute_anchor("earrings", "left", None, None, IMAGE_W, IMAGE_H)
     assert result.success is False
     assert result.error_code == "FACE_NOT_VISIBLE"
 
 
 def test_ear_anchor_fails_with_structured_code_when_low_confidence():
     face = _face_with_ears(left_conf=0.1)
-    result = compute_anchor("earring", "left", face, None, IMAGE_W, IMAGE_H)
+    result = compute_anchor("earrings", "left", face, None, IMAGE_W, IMAGE_H)
     assert result.success is False
     assert result.error_code in ("EAR_NOT_VISIBLE", "LOW_EAR_CONFIDENCE")
 

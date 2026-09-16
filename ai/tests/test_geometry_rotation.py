@@ -21,14 +21,14 @@ def _face_with_edge_landmarks(dy=0.0):
 
 def test_frontal_face_rotation_is_near_neutral():
     face = _face_with_edge_landmarks(dy=0.0)
-    result = compute_rotation("earring", face, None, IMAGE_W, IMAGE_H)
+    result = compute_rotation("earrings", face, None, IMAGE_W, IMAGE_H)
     assert result.success is True
     assert result.rotation_degrees == pytest.approx(0.0, abs=1e-6)
 
 
 def test_tilted_face_produces_nonzero_rotation_matching_geometry():
     face = _face_with_edge_landmarks(dy=0.05)
-    result = compute_rotation("earring", face, None, IMAGE_W, IMAGE_H)
+    result = compute_rotation("earrings", face, None, IMAGE_W, IMAGE_H)
     dx_px = 0.4 * IMAGE_W
     dy_px = 0.05 * IMAGE_H
     expected = math.degrees(math.atan2(dy_px, dx_px))
@@ -37,12 +37,12 @@ def test_tilted_face_produces_nonzero_rotation_matching_geometry():
 
 def test_earring_rotation_is_capped_for_extreme_tilt():
     face = _face_with_edge_landmarks(dy=5.0)  # absurd landmark noise
-    result = compute_rotation("earring", face, None, IMAGE_W, IMAGE_H)
+    result = compute_rotation("earrings", face, None, IMAGE_W, IMAGE_H)
     assert abs(result.rotation_degrees) <= MAX_EARRING_ROTATION_DEGREES
 
 
 def test_earring_rotation_neutral_fallback_when_no_face():
-    result = compute_rotation("earring", None, None, IMAGE_W, IMAGE_H)
+    result = compute_rotation("earrings", None, None, IMAGE_W, IMAGE_H)
     assert result.success is False
     assert result.rotation_degrees == 0.0
     assert result.method == "neutral_fallback_no_landmarks"

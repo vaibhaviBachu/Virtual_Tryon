@@ -100,17 +100,17 @@ def storage():
 
 @pytest.fixture()
 def earring_category():
-    """Milestone 4's engine keys off the category SLUG "earring" exactly (this
+    """Milestone 4's engine keys off the category SLUG "earrings" exactly (this
     milestone's two functional categories are fixed, spec §26) — reuse an existing row
     with that slug if one is already present (matches real catalogue data: one
-    canonical "earring" category) rather than creating and deleting a duplicate every
+    canonical "earrings" category) rather than creating and deleting a duplicate every
     test run, which would collide on the unique slug constraint."""
     with session_scope() as db:
-        existing = db.query(JewelleryCategory).filter(JewelleryCategory.slug == "earring").first()
+        existing = db.query(JewelleryCategory).filter(JewelleryCategory.slug == "earrings").first()
         if existing:
             yield existing.id
             return
-        category = JewelleryCategory(name="Earrings", slug="earring")
+        category = JewelleryCategory(name="Earrings", slug="earrings")
         db.add(category)
         db.flush()
         category_id = category.id
@@ -169,7 +169,7 @@ def ready_earring_setup(unique_suffix, storage, earring_category, face_landmarke
         )
         db.add(request)
         db.flush()
-        render = TryOnRender(request_id=request.id, jewellery_id=jewellery.id, category_slug="earring")
+        render = TryOnRender(request_id=request.id, jewellery_id=jewellery.id, category_slug="earrings")
         db.add(render)
         db.flush()
 

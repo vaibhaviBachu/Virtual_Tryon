@@ -35,7 +35,7 @@ def compute_rotation(
     image_width_px: int,
     image_height_px: int,
 ) -> RotationResult:
-    if category_slug == "earring":
+    if category_slug == "earrings":
         return _compute_earring_rotation(face, image_width_px, image_height_px)
     if category_slug == "necklace":
         return _compute_necklace_rotation(pose, image_width_px, image_height_px)

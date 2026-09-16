@@ -128,7 +128,7 @@ def _validate(request: TryOnRequest, jewellery: Jewellery, asset: Optional[Jewel
     validation passes. Mirrors ai/landmarks/readiness.py's category-aware philosophy:
     a photo/asset can be valid for one category and not another."""
     category_slug = jewellery.category.slug if jewellery.category else None
-    if category_slug not in ("earring", "necklace"):
+    if category_slug not in ("earrings", "necklace"):
         return category_slug, "UNSUPPORTED_CATEGORY", (
             f"Try-on rendering for category {category_slug!r} is not available yet."
         )
@@ -140,7 +140,7 @@ def _validate(request: TryOnRequest, jewellery: Jewellery, asset: Optional[Jewel
         return category_slug, "REQUEST_NOT_READY", "Your photo analysis has not finished yet."
 
     readiness = request.readiness or {}
-    if category_slug == "earring" and not readiness.get("ears_ready"):
+    if category_slug == "earrings" and not readiness.get("ears_ready"):
         reason = (readiness.get("reasons") or {}).get("ears") or "Your ears aren't clearly visible in this photo."
         return category_slug, "EAR_NOT_VISIBLE", reason
     if category_slug == "necklace" and not readiness.get("neck_ready"):
@@ -207,7 +207,7 @@ def process_one_job(
 
         placement_config = {
             "category_slug": category_slug,
-            "side": "both" if category_slug == "earring" else None,
+            "side": "both" if category_slug == "earrings" else None,
             "face_landmarks": request.face_landmarks,
             "pose_landmarks": request.pose_landmarks,
             "asset_anchor_x": asset.anchor_x,

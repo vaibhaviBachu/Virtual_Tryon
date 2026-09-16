@@ -26,7 +26,7 @@ def compute_anchor(
     """Category-specific BODY_ANCHOR derivation (spec §19: category-specific anchor
     models are expected, not a single generic rule). Every returned anchor_px is in the
     user PHOTO's pixel space (image_width_px x image_height_px)."""
-    if category_slug == "earring":
+    if category_slug == "earrings":
         return _compute_ear_anchor(side, face, image_width_px, image_height_px)
     if category_slug == "necklace":
         return _compute_necklace_anchor(pose, image_width_px, image_height_px)

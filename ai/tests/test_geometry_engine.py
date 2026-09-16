@@ -81,7 +81,7 @@ def test_earring_renders_successfully_on_frontal_face(face_landmarker):
 
     engine = GeometryTryOnEngine()
     config = {
-        "category_slug": "earring",
+        "category_slug": "earrings",
         "side": "both",
         "face_landmarks": _serialize_face(face_result),
         "pose_landmarks": None,
@@ -110,7 +110,7 @@ def test_earring_result_differs_from_original_photo(face_landmarker):
     face_result = face_landmarker.detect(image)
     engine = GeometryTryOnEngine()
     config = {
-        "category_slug": "earring",
+        "category_slug": "earrings",
         "side": "right",
         "face_landmarks": _serialize_face(face_result),
         "pose_landmarks": None,
@@ -142,7 +142,7 @@ def test_necklace_renders_successfully_on_real_pose_photo(pose_landmarker):
 def test_no_face_returns_structured_ear_not_visible_error():
     noise = (np.random.RandomState(1).rand(400, 400, 3) * 255).astype(np.uint8)
     engine = GeometryTryOnEngine()
-    config = {"category_slug": "earring", "side": "left", "face_landmarks": None, "pose_landmarks": None}
+    config = {"category_slug": "earrings", "side": "left", "face_landmarks": None, "pose_landmarks": None}
     result = engine.render(_jpeg_bytes(noise), _stud_earring_asset_bytes(), config)
     assert result.success is False
     assert result.error_code == "FACE_NOT_VISIBLE"
@@ -171,7 +171,7 @@ def test_invalid_asset_bytes_return_structured_error(face_landmarker):
     face_result = face_landmarker.detect(image)
     engine = GeometryTryOnEngine()
     config = {
-        "category_slug": "earring", "side": "left",
+        "category_slug": "earrings", "side": "left",
         "face_landmarks": _serialize_face(face_result), "pose_landmarks": None,
     }
     blank_asset = np.zeros((50, 50, 4), dtype=np.uint8)
@@ -187,7 +187,7 @@ def test_debug_visualization_available_via_render_with_debug(face_landmarker):
     face_result = face_landmarker.detect(image)
     engine = GeometryTryOnEngine()
     config = {
-        "category_slug": "earring", "side": "both",
+        "category_slug": "earrings", "side": "both",
         "face_landmarks": _serialize_face(face_result), "pose_landmarks": None,
     }
     geometry_result = engine.render_with_debug(_jpeg_bytes(image), _stud_earring_asset_bytes(), config)
@@ -204,7 +204,7 @@ def test_deterministic_given_identical_inputs(face_landmarker):
     face_result = face_landmarker.detect(image)
     engine = GeometryTryOnEngine()
     config = {
-        "category_slug": "earring", "side": "both",
+        "category_slug": "earrings", "side": "both",
         "face_landmarks": _serialize_face(face_result), "pose_landmarks": None,
     }
     asset_bytes = _stud_earring_asset_bytes()

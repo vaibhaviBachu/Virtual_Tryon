@@ -33,7 +33,7 @@ def compute_scale(
     if effective_width_px <= 0:
         return ScaleResult(success=False, method="asset_has_no_measurable_width")
 
-    if category_slug == "earring":
+    if category_slug == "earrings":
         target_width_px, used_physical, assumptions = _earring_target_width(
             asset_geometry, anchor.reference_measurement_px
         )
