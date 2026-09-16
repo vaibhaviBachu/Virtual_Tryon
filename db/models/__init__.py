@@ -3,7 +3,14 @@ metadata, like create_all in tests) sees all of them from a single import."""
 from db.models.category import JewelleryCategory
 from db.models.jewellery import Jewellery
 from db.models.jewellery_asset import AssetType, JewelleryAsset, ProcessingStatus
-from db.models.tryon import TryOnRequest, TryOnRequestStatus, TryOnSession, UserImage
+from db.models.tryon import (
+    TryOnRender,
+    TryOnRenderStatus,
+    TryOnRequest,
+    TryOnRequestStatus,
+    TryOnSession,
+    UserImage,
+)
 from db.models.user import User, UserRole
 
 __all__ = [
@@ -16,6 +23,8 @@ __all__ = [
     "UserImage",
     "TryOnRequest",
     "TryOnRequestStatus",
+    "TryOnRender",
+    "TryOnRenderStatus",
     "User",
     "UserRole",
 ]

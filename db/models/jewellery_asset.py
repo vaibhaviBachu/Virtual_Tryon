@@ -11,7 +11,7 @@ import enum
 import uuid
 from typing import Optional
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,5 +60,27 @@ class JewelleryAsset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # (workers/tasks/process_jewellery_asset.py) and never stored here or sent to the
     # frontend, per docs/production-readiness.md's error-handling rule.
     processing_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- Milestone 4: geometry try-on anchor metadata (spec §8, §11, §19) ---
+    # Normalized [0,1], top-left-origin coordinates of the JEWELLERY_ANCHOR (the
+    # attachment point — e.g. an earring hook, a necklace's chain-center) within THIS
+    # asset's own image plane. Nullable: most catalogue rows will not have an
+    # admin-supplied anchor, and the geometry engine falls back to a documented default
+    # derived from the asset's own non-transparent alpha bounding box (see
+    # ai/geometry/asset_geometry.py) rather than the raw image rectangle (spec §18).
+    anchor_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    anchor_y: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Free-text, category-appropriate label for what the anchor represents (e.g.
+    # "ear_hook", "chain_center") — descriptive metadata only, never parsed for control
+    # flow (category-specific placement logic lives in ai/geometry, keyed off the
+    # jewellery's category, not this string).
+    attachment_point: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    # Spec §11: "if the catalogue contains a single symmetric earring asset, provide an
+    # explicit transformation option for mirroring... if asymmetric, do not
+    # automatically mirror it unless the metadata says it is allowed." Defaults to
+    # False (the safe, non-destructive default — an asymmetric asset silently mirrored
+    # would look wrong on one ear) and must be explicitly set True by an admin who has
+    # confirmed the design is left/right-symmetric.
+    mirrorable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     jewellery = relationship("Jewellery", back_populates="assets")

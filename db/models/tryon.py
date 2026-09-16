@@ -144,3 +144,67 @@ class TryOnRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     session = relationship("TryOnSession", back_populates="requests")
     user_image = relationship("UserImage")
+
+
+class TryOnRenderStatus(str, enum.Enum):
+    """Distinct from TryOnRequestStatus: a TryOnRequest is "understand this photo"
+    (Milestone 3); a TryOnRender is one "place this jewellery on that photo" attempt
+    (Milestone 4) — a single ready TryOnRequest can have many renders (different
+    jewellery, retries). `blocked` is a first-class terminal state distinct from
+    `failed`: it means the readiness gate correctly prevented rendering (spec §21),
+    not that rendering was attempted and crashed."""
+
+    queued = "queued"
+    processing = "processing"
+    ready = "ready"
+    failed = "failed"
+    blocked = "blocked"
+
+
+class TryOnRender(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One geometry-engine render attempt for a (TryOnRequest, Jewellery) pair —
+    Milestone 4 (spec §6, §22-24). No binary image data here: `result_storage_key`/
+    `debug_storage_key` point at private object-storage objects, signed URLs are
+    generated on demand, never stored (same rule as every other asset in this codebase).
+    """
+
+    __tablename__ = "tryon_renders"
+
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("tryon_requests.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    jewellery_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("jewellery.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("jewellery_assets.id", ondelete="SET NULL"), nullable=True
+    )
+    category_slug: Mapped[str] = mapped_column(String(60), nullable=False)
+    engine_name: Mapped[str] = mapped_column(String(40), nullable=False, default="geometry", server_default="geometry")
+
+    status: Mapped[TryOnRenderStatus] = mapped_column(
+        Enum(TryOnRenderStatus, name="tryon_render_status", native_enum=False, length=20),
+        nullable=False,
+        default=TryOnRenderStatus.queued,
+        server_default=TryOnRenderStatus.queued.value,
+    )
+    # Structured, machine-readable reason (spec §21, e.g. "EAR_NOT_VISIBLE",
+    # "ASSET_NOT_READY") — distinct from `error_message`, the safe human-readable copy.
+    error_code: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    result_storage_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Debug/internal-only visualization (spec §27) — never surfaced to normal customers,
+    # only via the developer-only debug endpoint gated by Settings.ENABLE_TRYON_DEBUG_VIZ.
+    debug_storage_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
+    placement_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
+    queued_at: Mapped[Optional[Any]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[Optional[Any]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[Any]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    request = relationship("TryOnRequest")
+    jewellery = relationship("Jewellery")
+    asset = relationship("JewelleryAsset")
