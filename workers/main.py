@@ -23,6 +23,7 @@ from fastapi import FastAPI
 
 from workers.config import get_worker_settings
 from workers.heartbeat import Heartbeat
+from workers.tasks.process_jewellery_asset import run_consumer_loop
 
 logger = logging.getLogger("worker.main")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -43,15 +44,32 @@ def _heartbeat_loop() -> None:
         _stop_event.wait(settings.HEARTBEAT_INTERVAL_SECONDS)
 
 
+def _consumer_loop() -> None:
+    # Uses its own Redis connection (blocking BLPOP calls must not share a client with
+    # the heartbeat's SET calls on another thread).
+    consumer_redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        run_consumer_loop(consumer_redis_client, _stop_event, poll_timeout_seconds=5)
+    except Exception:
+        logger.exception("Catalogue asset consumer loop crashed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
-    thread.start()
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
+    heartbeat_thread.start()
     logger.info("Worker heartbeat loop started")
+
+    consumer_thread = threading.Thread(target=_consumer_loop, daemon=True, name="catalogue-asset-consumer")
+    consumer_thread.start()
+    logger.info("Catalogue asset processing consumer thread started")
+
     yield
+
     _stop_event.set()
-    thread.join(timeout=5)
-    logger.info("Worker heartbeat loop stopped")
+    heartbeat_thread.join(timeout=5)
+    consumer_thread.join(timeout=10)
+    logger.info("Worker heartbeat loop and consumer thread stopped")
 
 
 app = FastAPI(title="jewellery-virtual-tryon-worker", lifespan=lifespan)
