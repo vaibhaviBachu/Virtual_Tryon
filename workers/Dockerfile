@@ -2,8 +2,20 @@ FROM python:3.11-slim
 
 WORKDIR /srv
 
+# libgomp1: required by onnxruntime/mediapipe's native ops.
+# libgl1, libglib2.0-0, libsm6, libxext6, libxrender1, libxcb1: required at import time
+# by opencv-contrib-python (mediapipe's own pinned OpenCV dependency, a full/GUI build,
+# not opencv-python-headless) even though this worker never opens a GUI window or
+# display — cv2's shared library still dynamically links against these X11/GL libs on
+# import. Without them, `import cv2` fails with `ImportError: libxcb.so.1: cannot open
+# shared object file` inside this slim base image (confirmed for real via
+# `docker compose logs worker` on a real machine with normal internet access — Docker
+# build/run could not be verified in the sandbox this project was developed in, so this
+# was only caught once run for real; see docs/milestone-4-verification.md's Docker
+# verification note).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl libgomp1 \
+    && apt-get install -y --no-install-recommends \
+        curl libgomp1 libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY workers/requirements.txt /srv/workers/requirements.txt
