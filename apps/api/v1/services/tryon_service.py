@@ -221,7 +221,7 @@ def list_functional_categories(db: Session) -> list[dict]:
         .all()
     )
     return [
-        {"slug": c.slug, "name": c.name, "functional": c.slug in FUNCTIONAL_CATEGORY_SLUGS}
+        {"id": c.id, "slug": c.slug, "name": c.name, "functional": c.slug in FUNCTIONAL_CATEGORY_SLUGS}
         for c in categories
     ]
 

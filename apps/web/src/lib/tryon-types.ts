@@ -53,3 +53,33 @@ export interface TryOnRequestResponse {
   started_at: string | null;
   completed_at: string | null;
 }
+
+// --- Milestone 4: geometry try-on rendering ---
+
+export interface CategoryOptionResponse {
+  id: string;
+  slug: string;
+  name: string;
+  // Real backend flag (spec §26) — only "earrings"/"necklace" are true in Milestone 4.
+  // The frontend must never hard-code which categories can render.
+  functional: boolean;
+}
+
+export type TryOnRenderStatus = "queued" | "processing" | "ready" | "failed" | "blocked";
+
+export interface TryOnRenderResponse {
+  id: string;
+  request_id: string;
+  jewellery_id: string;
+  asset_id: string | null;
+  category_slug: string;
+  status: TryOnRenderStatus;
+  error_code: string | null;
+  error_message: string | null;
+  // Signed, short-lived — only populated once status === "ready".
+  result_image_url: string | null;
+  created_at: string;
+  queued_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}

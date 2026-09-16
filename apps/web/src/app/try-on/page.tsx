@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { SiteHeader } from "@/components/site-header";
 import { CaptureSourceSelector } from "@/components/camera/CaptureSourceSelector";
@@ -8,12 +8,21 @@ import { PhotoGuidance } from "@/components/camera/PhotoGuidance";
 import type { CapturedPhoto } from "@/components/camera/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useTryOnStore, type JewelleryCategoryOption } from "@/store/tryon-store";
+import { useTryOnStore } from "@/store/tryon-store";
 import { STUDIO_STEPS, stepIndex } from "@/app/try-on/studio-steps";
 import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/catalogue-api";
-import { createTryOnRequest, createTryOnSession, pollTryOnRequest, uploadTryOnImage } from "@/lib/tryon-api";
-import type { TryOnRequestStatus } from "@/lib/tryon-types";
+import { listJewellery } from "@/lib/catalogue-api";
+import {
+  createTryOnRender,
+  createTryOnRequest,
+  createTryOnSession,
+  listTryOnCategories,
+  pollTryOnRender,
+  pollTryOnRequest,
+  uploadTryOnImage,
+} from "@/lib/tryon-api";
+import type { TryOnRenderStatus, TryOnRequestStatus } from "@/lib/tryon-types";
 
 // Real backend status -> a short, honest label. No fabricated progress percentages,
 // per the Milestone 3 spec's explicit rule — every label here corresponds to a real
@@ -29,21 +38,15 @@ const STATUS_LABELS: Record<TryOnRequestStatus, string> = {
   failed: "Analysis failed",
 };
 
-// Milestone 1 placeholder catalogue data — real data comes from GET /api/v1/catalog in
-// Milestone 2. Kept here, not hard-coded into the render logic, so swapping in a real
-// fetch later is a data-source change, not a UI rewrite.
-const PLACEHOLDER_CATEGORIES: JewelleryCategoryOption[] = [
-  { slug: "earring", displayName: "Earrings" },
-  { slug: "necklace", displayName: "Necklaces" },
-  { slug: "bangle", displayName: "Bangles" },
-  { slug: "ring", displayName: "Rings" },
-];
-
-const PLACEHOLDER_ITEMS = [
-  { id: "demo-1", name: "Item A" },
-  { id: "demo-2", name: "Item B" },
-  { id: "demo-3", name: "Item C" },
-];
+// Real backend render status -> a short, honest label — same "no fabricated progress"
+// rule as STATUS_LABELS above, now for Milestone 4's render lifecycle.
+const RENDER_STATUS_LABELS: Record<TryOnRenderStatus, string> = {
+  queued: "Waiting to render…",
+  processing: "Placing the jewellery on your photo…",
+  ready: "Try-on ready",
+  failed: "Rendering failed",
+  blocked: "Couldn't render this item",
+};
 
 function StepIndicator({ current }: { current: number }) {
   return (
@@ -81,12 +84,18 @@ export default function TryOnStudioPage() {
     analysisStatusLabel,
     readiness,
     analysisError,
+    categories,
+    items,
+    requestId,
+    renderStatusLabel,
+    resultImageUrl,
+    renderErrorMessage,
     startCapturing,
     setCapturedImage,
+    setCategories,
     selectCategory,
+    setItems,
     selectItem,
-    startProcessing,
-    finishProcessing,
     startComparing,
     tryAnotherItem,
     reset,
@@ -95,13 +104,89 @@ export default function TryOnStudioPage() {
     setAnalysisStatus,
     finishAnalyzingWithReadiness,
     failAnalysis,
+    startRendering,
+    setRenderId,
+    setRenderStatus,
+    finishRenderingWithResult,
+    finishRenderingBlockedOrFailed,
   } = useTryOnStore();
 
   const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+  const [itemsError, setItemsError] = useState<string | null>(null);
 
   function handleCapture(photo: CapturedPhoto) {
     setCapturedPhoto(photo);
     setCapturedImage(photo.objectUrl);
+  }
+
+  // Milestone 4: fetch real, backend-driven category data once analysis finishes and
+  // the studio reaches the category-selection step — never a hard-coded frontend list
+  // (spec §26), so a category the geometry engine doesn't support yet always renders
+  // disabled here instead of being silently omitted or wrongly offered.
+  useEffect(() => {
+    if (state !== "selecting_category" || categories.length > 0) return;
+    let cancelled = false;
+    listTryOnCategories()
+      .then((fetched) => {
+        if (cancelled) return;
+        setCategories(
+          fetched.map((c) => ({ id: c.id, slug: c.slug, displayName: c.name, functional: c.functional }))
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) setCategoriesError(err instanceof ApiError ? err.message : "Couldn't load categories.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state, categories.length, setCategories]);
+
+  // Fetch the real catalogue items for the selected category once it's chosen.
+  useEffect(() => {
+    if (state !== "selecting_item" || !selectedCategory) return;
+    let cancelled = false;
+    listJewellery({ categoryId: selectedCategory.id, isActive: true, pageSize: 50 })
+      .then((page) => {
+        if (cancelled) return;
+        setItemsError(null);
+        setItems(page.items.map((item) => ({ id: item.id, name: item.name })));
+      })
+      .catch(() => {
+        if (!cancelled) setItemsError("Couldn't load jewellery for this category.");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Re-fetch whenever a different category is selected (slug changes) — but only
+    // that, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, selectedCategory?.id]);
+
+  async function handleRenderTryOn() {
+    if (!requestId || !selectedItemId) return;
+    startRendering();
+    try {
+      const created = await createTryOnRender(requestId, selectedItemId);
+      setRenderId(created.id);
+      setRenderStatus(created.status, RENDER_STATUS_LABELS[created.status]);
+
+      const final = await pollTryOnRender(created.id, (update) => {
+        setRenderStatus(update.status, RENDER_STATUS_LABELS[update.status]);
+      });
+
+      if (final.status === "ready" && final.result_image_url) {
+        finishRenderingWithResult(final.result_image_url);
+      } else {
+        finishRenderingBlockedOrFailed(
+          final.error_code,
+          final.error_message ?? "We couldn't generate this try-on. Please try a different item or photo."
+        );
+      }
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Something went wrong generating your try-on.";
+      finishRenderingBlockedOrFailed(null, message);
+    }
   }
 
   async function handleAnalyzePhoto() {
@@ -133,15 +218,6 @@ export default function TryOnStudioPage() {
       const message = err instanceof ApiError ? err.message : "Something went wrong analyzing your photo.";
       failAnalysis(message);
     }
-  }
-
-  function handleTryOn() {
-    startProcessing();
-    // Milestone 1: there is no try-on engine yet (see ai/engines — Milestone 4 ships
-    // GeometryTryOnEngine). We simulate only the *wait*, never the *result* — the result
-    // screen explicitly says no engine is implemented, per docs/production-readiness.md's
-    // "do not fake AI results" rule.
-    window.setTimeout(() => finishProcessing(), 900);
   }
 
   return (
@@ -275,14 +351,27 @@ export default function TryOnStudioPage() {
                 <p className="text-neutral-600 dark:text-neutral-400">
                   Choose a jewellery category.
                 </p>
+                {categoriesError && (
+                  <p className="text-xs text-red-600 dark:text-red-400">{categoriesError}</p>
+                )}
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {PLACEHOLDER_CATEGORIES.map((category) => (
+                  {categories.map((category) => (
                     <button
                       key={category.slug}
-                      onClick={() => selectCategory(category)}
-                      className="rounded-xl border border-neutral-200 px-4 py-3 text-sm hover:border-neutral-900 dark:border-neutral-800 dark:hover:border-amber-400"
+                      disabled={!category.functional}
+                      onClick={() => category.functional && selectCategory(category)}
+                      title={category.functional ? undefined : "Coming in a future milestone"}
+                      className={cn(
+                        "rounded-xl border px-4 py-3 text-sm",
+                        category.functional
+                          ? "border-neutral-200 hover:border-neutral-900 dark:border-neutral-800 dark:hover:border-amber-400"
+                          : "cursor-not-allowed border-neutral-100 text-neutral-300 dark:border-neutral-900 dark:text-neutral-700"
+                      )}
                     >
                       {category.displayName}
+                      {!category.functional && (
+                        <span className="ml-1 text-[10px] uppercase">(soon)</span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -296,13 +385,17 @@ export default function TryOnStudioPage() {
                     ? `Choose a piece from ${selectedCategory.displayName}.`
                     : "Choose a piece."}
                 </p>
+                {itemsError && <p className="text-xs text-red-600 dark:text-red-400">{itemsError}</p>}
+                {!itemsError && items.length === 0 && (
+                  <p className="text-xs text-neutral-400">Loading jewellery…</p>
+                )}
                 <div className="grid grid-cols-3 gap-3">
-                  {PLACEHOLDER_ITEMS.map((item) => (
+                  {items.map((item) => (
                     <button
                       key={item.id}
                       onClick={() => selectItem(item.id)}
                       className={cn(
-                        "flex h-20 w-20 items-center justify-center rounded-xl border text-xs",
+                        "flex h-20 w-20 items-center justify-center rounded-xl border p-1 text-center text-xs",
                         selectedItemId === item.id
                           ? "border-neutral-900 dark:border-amber-400"
                           : "border-neutral-200 dark:border-neutral-800"
@@ -312,7 +405,7 @@ export default function TryOnStudioPage() {
                     </button>
                   ))}
                 </div>
-                <Button disabled={!selectedItemId} onClick={handleTryOn}>
+                <Button disabled={!selectedItemId} onClick={handleRenderTryOn}>
                   Try this jewellery on
                 </Button>
               </>
@@ -321,22 +414,61 @@ export default function TryOnStudioPage() {
             {state === "processing" && (
               <>
                 <div className="h-10 w-10 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-900 dark:border-neutral-700 dark:border-t-amber-400" />
-                <p className="text-sm text-neutral-500">Processing your try-on&hellip;</p>
+                <p className="text-sm text-neutral-500">
+                  {renderStatusLabel ?? "Preparing your try-on…"}
+                </p>
+                <p className="max-w-sm text-xs text-neutral-400">
+                  Placement is computed geometrically from your photo — this is not a
+                  generated/AI-edited image, only your photo with the jewellery
+                  positioned on it.
+                </p>
               </>
             )}
 
             {state === "result" && (
               <>
-                <p className="max-w-sm text-sm text-amber-700 dark:text-amber-400">
-                  The try-on engine is under development (arrives in Milestone 4). No
-                  result image is generated yet — this screen exists to validate the
-                  workflow end to end.
-                </p>
-                <div className="flex gap-3">
-                  <Button variant="secondary" onClick={startComparing}>
-                    Compare (preview)
+                {resultImageUrl ? (
+                  <>
+                    <div className="grid w-full grid-cols-2 gap-4">
+                      <div>
+                        <p className="mb-2 text-xs uppercase text-neutral-400">Original</p>
+                        {capturedImageUrl && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={capturedImageUrl} alt="Original" className="rounded-xl" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="mb-2 text-xs uppercase text-neutral-400">Try-on result</p>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={resultImageUrl} alt="Try-on result" className="rounded-xl" />
+                      </div>
+                    </div>
+                    <p className="max-w-sm text-xs text-neutral-400">
+                      Geometry-based placement (Milestone 4) — position, scale, and
+                      rotation are computed from your photo, not a photorealistic
+                      AI-generated render.
+                    </p>
+                  </>
+                ) : (
+                  <p className="max-w-sm text-sm text-amber-700 dark:text-amber-400">
+                    {renderErrorMessage ?? "We couldn't generate this try-on."}
+                  </p>
+                )}
+                <div className="flex flex-wrap justify-center gap-3">
+                  {resultImageUrl && (
+                    <Button variant="secondary" onClick={startComparing}>
+                      Compare
+                    </Button>
+                  )}
+                  {selectedItemId && (
+                    <Button variant="secondary" onClick={handleRenderTryOn}>
+                      Try again
+                    </Button>
+                  )}
+                  <Button variant="secondary" onClick={tryAnotherItem}>
+                    Change jewellery
                   </Button>
-                  <Button onClick={tryAnotherItem}>Try another item</Button>
+                  <Button onClick={startCapturing}>Retake photo</Button>
                 </div>
               </>
             )}

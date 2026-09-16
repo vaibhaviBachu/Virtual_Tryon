@@ -73,8 +73,11 @@ class CategoryOptionResponse(BaseModel):
     """Spec §26: "For Milestone 4 only expose Earrings and Necklaces as functional.
     Future categories may show as disabled but must not trigger unsupported
     rendering." `functional` is the one flag the frontend needs to gray out a category
-    without hard-coding the slug list itself."""
+    without hard-coding the slug list itself. `id` is included (not just `slug`) so the
+    frontend can filter GET /api/v1/catalog/jewellery?category_id=... directly, which
+    is keyed on the category's UUID, not its slug."""
 
+    id: UUID
     slug: str
     name: str
     functional: bool

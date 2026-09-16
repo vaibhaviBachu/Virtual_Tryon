@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { ReadinessSummary, TryOnRequestStatus } from "@/lib/tryon-types";
+import type { ReadinessSummary, TryOnRenderStatus, TryOnRequestStatus } from "@/lib/tryon-types";
 
 /**
  * The Try-On Studio state machine described in docs/architecture.md §3.
@@ -25,8 +25,18 @@ export type StudioState =
   | "comparing";
 
 export interface JewelleryCategoryOption {
+  id: string;
   slug: string;
   displayName: string;
+  // Milestone 4 (spec §26): real backend flag — only categories the geometry engine
+  // actually supports ("earrings", "necklace") are functional; everything else is
+  // shown disabled and must never trigger a render attempt.
+  functional: boolean;
+}
+
+export interface JewelleryItemOption {
+  id: string;
+  name: string;
 }
 
 interface TryOnStoreState {
@@ -45,9 +55,21 @@ interface TryOnStoreState {
   readiness: ReadinessSummary | null;
   analysisError: string | null;
 
+  // Milestone 4: real category/item catalogue data + the real render lifecycle.
+  categories: JewelleryCategoryOption[];
+  items: JewelleryItemOption[];
+  renderId: string | null;
+  renderStatus: TryOnRenderStatus | null;
+  renderStatusLabel: string | null;
+  resultImageUrl: string | null;
+  renderErrorCode: string | null;
+  renderErrorMessage: string | null;
+
   startCapturing: () => void;
   setCapturedImage: (url: string) => void;
+  setCategories: (categories: JewelleryCategoryOption[]) => void;
   selectCategory: (category: JewelleryCategoryOption) => void;
+  setItems: (items: JewelleryItemOption[]) => void;
   selectItem: (itemId: string) => void;
   startProcessing: () => void;
   finishProcessing: () => void;
@@ -60,6 +82,12 @@ interface TryOnStoreState {
   setAnalysisStatus: (status: TryOnRequestStatus, label: string) => void;
   finishAnalyzingWithReadiness: (readiness: ReadinessSummary) => void;
   failAnalysis: (message: string) => void;
+
+  startRendering: () => void;
+  setRenderId: (renderId: string) => void;
+  setRenderStatus: (status: TryOnRenderStatus, label: string) => void;
+  finishRenderingWithResult: (resultImageUrl: string) => void;
+  finishRenderingBlockedOrFailed: (errorCode: string | null, errorMessage: string) => void;
 }
 
 const initialState = {
@@ -74,6 +102,14 @@ const initialState = {
   analysisStatus: null,
   readiness: null,
   analysisError: null,
+  categories: [] as JewelleryCategoryOption[],
+  items: [] as JewelleryItemOption[],
+  renderId: null,
+  renderStatus: null,
+  renderStatusLabel: null,
+  resultImageUrl: null,
+  renderErrorCode: null,
+  renderErrorMessage: null,
 };
 
 export const useTryOnStore = create<TryOnStoreState>((set) => ({
@@ -84,8 +120,12 @@ export const useTryOnStore = create<TryOnStoreState>((set) => ({
   setCapturedImage: (url) =>
     set({ state: "previewing", capturedImageUrl: url }),
 
+  setCategories: (categories) => set({ categories }),
+
   selectCategory: (category) =>
-    set({ state: "selecting_item", selectedCategory: category }),
+    set({ state: "selecting_item", selectedCategory: category, items: [], selectedItemId: null }),
+
+  setItems: (items) => set({ items }),
 
   selectItem: (itemId) =>
     set({ state: "selecting_item", selectedItemId: itemId }),
@@ -97,7 +137,16 @@ export const useTryOnStore = create<TryOnStoreState>((set) => ({
   startComparing: () => set({ state: "comparing" }),
 
   tryAnotherItem: () =>
-    set({ state: "selecting_category", selectedItemId: null }),
+    set({
+      state: "selecting_category",
+      selectedItemId: null,
+      renderId: null,
+      renderStatus: null,
+      renderStatusLabel: null,
+      resultImageUrl: null,
+      renderErrorCode: null,
+      renderErrorMessage: null,
+    }),
 
   reset: () => set({ ...initialState }),
 
@@ -116,4 +165,25 @@ export const useTryOnStore = create<TryOnStoreState>((set) => ({
   finishAnalyzingWithReadiness: (readiness) => set({ state: "readiness", readiness }),
 
   failAnalysis: (message) => set({ state: "analysis_failed", analysisError: message }),
+
+  startRendering: () =>
+    set({
+      state: "processing",
+      renderId: null,
+      renderStatus: null,
+      renderStatusLabel: "Preparing your try-on…",
+      resultImageUrl: null,
+      renderErrorCode: null,
+      renderErrorMessage: null,
+    }),
+
+  setRenderId: (renderId) => set({ renderId }),
+
+  setRenderStatus: (status, label) => set({ renderStatus: status, renderStatusLabel: label }),
+
+  finishRenderingWithResult: (resultImageUrl) =>
+    set({ state: "result", renderStatus: "ready", resultImageUrl, renderErrorCode: null, renderErrorMessage: null }),
+
+  finishRenderingBlockedOrFailed: (errorCode, errorMessage) =>
+    set({ state: "result", renderErrorCode: errorCode, renderErrorMessage: errorMessage, resultImageUrl: null }),
 }));

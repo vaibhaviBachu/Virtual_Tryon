@@ -1,6 +1,12 @@
 import { API_BASE_URL } from "@/lib/config";
 import { ApiError } from "@/lib/catalogue-api";
-import type { TryOnRequestResponse, TryOnSession, UserImageResponse } from "@/lib/tryon-types";
+import type {
+  CategoryOptionResponse,
+  TryOnRenderResponse,
+  TryOnRequestResponse,
+  TryOnSession,
+  UserImageResponse,
+} from "@/lib/tryon-types";
 
 /**
  * Typed client for the Milestone 3 user-image-pipeline API. Guest sessions work with no
@@ -93,6 +99,53 @@ export async function pollTryOnRequest(
     }
     if (Date.now() - start > timeoutMs) {
       throw new ApiError("Processing is taking longer than expected. Please try again.", 408);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+// --- Milestone 4: geometry try-on rendering ---
+
+export async function listTryOnCategories(): Promise<CategoryOptionResponse[]> {
+  return request("/api/v1/tryon/categories");
+}
+
+export async function createTryOnRender(
+  requestId: string,
+  jewelleryId: string,
+  token?: string | null
+): Promise<TryOnRenderResponse> {
+  return request(`/api/v1/tryon/requests/${requestId}/render`, {
+    method: "POST",
+    body: JSON.stringify({ jewellery_id: jewelleryId }),
+    token,
+  });
+}
+
+export async function getTryOnRender(renderId: string, token?: string | null): Promise<TryOnRenderResponse> {
+  return request(`/api/v1/tryon/renders/${renderId}`, { token });
+}
+
+const RENDER_TERMINAL_STATUSES = new Set(["ready", "failed", "blocked"]);
+
+/**
+ * Polls GET /renders/{id} until a terminal status (`ready`/`failed`/`blocked`) — same
+ * "no fabricated progress" discipline as pollTryOnRequest above.
+ */
+export async function pollTryOnRender(
+  renderId: string,
+  onUpdate: (render: TryOnRenderResponse) => void,
+  { intervalMs = 800, timeoutMs = 30000, token }: { intervalMs?: number; timeoutMs?: number; token?: string | null } = {}
+): Promise<TryOnRenderResponse> {
+  const start = Date.now();
+  for (;;) {
+    const current = await getTryOnRender(renderId, token);
+    onUpdate(current);
+    if (RENDER_TERMINAL_STATUSES.has(current.status)) {
+      return current;
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new ApiError("Rendering is taking longer than expected. Please try again.", 408);
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
