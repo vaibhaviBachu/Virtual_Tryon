@@ -31,7 +31,13 @@ ai/models/weights/
 *.safetensors
 
 # --- Evaluation datasets / user photos (never committed) ---
-evaluation/data/
+# Documentation (SOURCES.md) is tracked; actual image bytes are generated locally by
+# evaluation/scripts/generate_synthetic_dataset.py or fetched per SOURCES.md, never
+# committed — see docs/milestone-3-verification.md §10.
+!evaluation/data/
+!evaluation/data/test_images/
+evaluation/data/*/*
+!evaluation/data/test_images/SOURCES.md
 evaluation/users/*/*
 !evaluation/users/*/.gitkeep
 evaluation/jewellery/*/*

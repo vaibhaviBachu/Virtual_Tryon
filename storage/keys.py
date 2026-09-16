@@ -46,3 +46,21 @@ def jewellery_asset_key(jewellery_id: uuid.UUID, asset_type: str, mime_type: str
     ext = sanitize_extension(extension_for_mime_type(mime_type))
     filename = f"{uuid.uuid4()}.{ext}"
     return f"jewellery/{jewellery_id}/{asset_type}/{filename}"
+
+
+def user_image_key(session_id: uuid.UUID, mime_type: str) -> str:
+    """Milestone 3: user/customer photos live under `uploads/`, a top-level prefix
+    completely separate from `jewellery/` (per docs/architecture.md §8 and this
+    milestone's privacy rule — user photos are never in the same namespace as
+    catalogue assets, and this bucket/prefix is never made public)."""
+    ext = sanitize_extension(extension_for_mime_type(mime_type))
+    filename = f"{uuid.uuid4()}.{ext}"
+    return f"uploads/{session_id}/original/{filename}"
+
+
+def segmentation_mask_key(request_id: uuid.UUID) -> str:
+    """Private, intermediate segmentation-mask artifact — PNG, one per request. Kept
+    separate from `uploads/` so a future retention job can target intermediate
+    artifacts on a shorter lifecycle than the original photo if desired, without a
+    prefix-matching ambiguity."""
+    return f"tryon-intermediate/{request_id}/segmentation_mask.png"
