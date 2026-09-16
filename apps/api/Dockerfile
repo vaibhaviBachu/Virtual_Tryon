@@ -9,10 +9,14 @@ RUN apt-get update \
 COPY apps/api/requirements.txt /srv/apps/api/requirements.txt
 RUN pip install --no-cache-dir -r /srv/apps/api/requirements.txt
 
-# ai/ is copied in even though Milestone 1 doesn't import it yet, so the worker/api
-# import boundary (apps/api -> workers -> ai) is exercised by the build from day one.
+# db/ is the shared ORM package (both api and worker import it, but never each other
+# — see db/base.py). ai/ carries the catalogue asset-processing pipeline (Milestone 2)
+# and the (still-unimplemented) try-on engines.
 COPY apps/api /srv/apps/api
 COPY ai /srv/ai
+COPY db /srv/db
+COPY storage /srv/storage
+COPY jobqueue /srv/jobqueue
 
 RUN chmod +x /srv/apps/api/entrypoint.sh
 

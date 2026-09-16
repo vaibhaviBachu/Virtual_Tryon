@@ -3,6 +3,17 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 pydantic-settings==2.5.2
 redis==5.0.8
+SQLAlchemy==2.0.35
+psycopg[binary]==3.2.2
+boto3==1.35.24
+Pillow==10.4.0
+# Background-removal pipeline (Milestone 2 catalogue asset processing — see
+# ai/catalogue/background_remover.py and ai/models/LICENSES.md for the license check):
+# rembg (MIT) running the U-2-Net ONNX model (Apache 2.0), CPU-only via onnxruntime.
+# NOT the try-on hot path — this only runs on admin catalogue asset uploads.
+rembg==2.0.59
+onnxruntime==1.19.2
 pytest==8.3.3
 httpx==0.27.2
 fakeredis==2.24.1
+moto[s3]==5.0.13

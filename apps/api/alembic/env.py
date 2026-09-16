@@ -4,11 +4,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from apps.api.core.config import get_settings
-from apps.api.db.base import Base
-
-# Import model modules here as they're added (Milestone 2+) so Base.metadata is complete
-# for autogenerate, e.g.:
-#   from apps.api.db.models import jewellery  # noqa: F401
+from db.base import Base
+import db.models  # noqa: F401  (registers all model classes on Base.metadata)
 
 config = context.config
 

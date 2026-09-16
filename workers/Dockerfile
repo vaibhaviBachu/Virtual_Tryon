@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /srv
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY workers/requirements.txt /srv/workers/requirements.txt
@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r /srv/workers/requirements.txt
 
 COPY workers /srv/workers
 COPY ai /srv/ai
+COPY db /srv/db
+COPY storage /srv/storage
+COPY jobqueue /srv/jobqueue
 
 ENV PYTHONPATH=/srv \
     PYTHONUNBUFFERED=1

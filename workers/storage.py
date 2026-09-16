@@ -1,20 +1,19 @@
 """
-API-side object storage factory: builds the shared S3CompatibleStorage (storage/) from
-apps.api.core.config settings. See storage/s3_storage.py for the implementation and
-workers/storage.py for the worker-side equivalent (built from workers.config instead).
+Worker-side object storage factory — mirrors apps/api/storage/s3_storage.py but built
+from WorkerSettings, never from apps.api.core.config (see db/base.py for why worker and
+api never import each other's config/session code even though they share storage/db
+abstractions).
 """
 from functools import lru_cache
 
-from apps.api.core.config import get_settings
 from storage.base import ObjectStorage
 from storage.s3_storage import S3CompatibleStorage
-
-__all__ = ["ObjectStorage", "S3CompatibleStorage", "get_object_storage"]
+from workers.config import get_worker_settings
 
 
 @lru_cache
 def get_object_storage() -> ObjectStorage:
-    settings = get_settings()
+    settings = get_worker_settings()
     return S3CompatibleStorage(
         endpoint=settings.MINIO_ENDPOINT,
         access_key=settings.MINIO_ACCESS_KEY,

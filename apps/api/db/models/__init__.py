@@ -1,3 +1,12 @@
-# Milestone 2 will add: User, JewelleryCategory, Jewellery, JewelleryAsset,
-# TryonSession, TryonRequest models here, each importing Base from apps.api.db.base.
-# Intentionally empty in Milestone 1 per the "do not prematurely add tables" rule.
+# Milestone 2: the actual model classes live in the top-level `db/models/` package
+# (shared with workers/) — see db/base.py for the rationale. Re-exported here so any
+# existing `from apps.api.db.models import ...` import still resolves.
+from db.models import (  # noqa: F401
+    AssetType,
+    Jewellery,
+    JewelleryAsset,
+    JewelleryCategory,
+    ProcessingStatus,
+    User,
+    UserRole,
+)

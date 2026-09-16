@@ -47,3 +47,8 @@ evaluation/expected/*
 
 # --- Logs ---
 *.log
+
+# --- Local dev artifacts (native-process verification, see docs/development.md) ---
+dump.rdb
+.venv/
+.venv-check/
