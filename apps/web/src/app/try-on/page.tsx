@@ -4,12 +4,30 @@ import { useState } from "react";
 
 import { SiteHeader } from "@/components/site-header";
 import { CaptureSourceSelector } from "@/components/camera/CaptureSourceSelector";
+import { PhotoGuidance } from "@/components/camera/PhotoGuidance";
 import type { CapturedPhoto } from "@/components/camera/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useTryOnStore, type JewelleryCategoryOption } from "@/store/tryon-store";
 import { STUDIO_STEPS, stepIndex } from "@/app/try-on/studio-steps";
 import { cn } from "@/lib/utils";
+import { ApiError } from "@/lib/catalogue-api";
+import { createTryOnRequest, createTryOnSession, pollTryOnRequest, uploadTryOnImage } from "@/lib/tryon-api";
+import type { TryOnRequestStatus } from "@/lib/tryon-types";
+
+// Real backend status -> a short, honest label. No fabricated progress percentages,
+// per the Milestone 3 spec's explicit rule — every label here corresponds to a real
+// `TryOnRequest.status` value the API actually returns.
+const STATUS_LABELS: Record<TryOnRequestStatus, string> = {
+  created: "Preparing your photo…",
+  uploaded: "Photo received…",
+  queued: "Waiting to be analyzed…",
+  processing: "Analyzing your photo…",
+  landmarks_ready: "Checking face, ears, and hands…",
+  segmentation_ready: "Checking overall visibility…",
+  ready: "Analysis complete",
+  failed: "Analysis failed",
+};
 
 // Milestone 1 placeholder catalogue data — real data comes from GET /api/v1/catalog in
 // Milestone 2. Kept here, not hard-coded into the render logic, so swapping in a real
@@ -60,6 +78,9 @@ export default function TryOnStudioPage() {
     capturedImageUrl,
     selectedCategory,
     selectedItemId,
+    analysisStatusLabel,
+    readiness,
+    analysisError,
     startCapturing,
     setCapturedImage,
     selectCategory,
@@ -69,6 +90,11 @@ export default function TryOnStudioPage() {
     startComparing,
     tryAnotherItem,
     reset,
+    startAnalyzing,
+    setAnalysisIds,
+    setAnalysisStatus,
+    finishAnalyzingWithReadiness,
+    failAnalysis,
   } = useTryOnStore();
 
   const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
@@ -76,6 +102,37 @@ export default function TryOnStudioPage() {
   function handleCapture(photo: CapturedPhoto) {
     setCapturedPhoto(photo);
     setCapturedImage(photo.objectUrl);
+  }
+
+  async function handleAnalyzePhoto() {
+    if (!capturedPhoto) return;
+    startAnalyzing();
+    try {
+      const session = await createTryOnSession({ source: capturedPhoto.source });
+      setAnalysisIds({ sessionId: session.id });
+
+      const image = await uploadTryOnImage(session.id, capturedPhoto.blob, capturedPhoto.source);
+      setAnalysisIds({ userImageId: image.id });
+
+      const created = await createTryOnRequest(session.id, image.id);
+      setAnalysisIds({ requestId: created.id });
+      setAnalysisStatus(created.status, STATUS_LABELS[created.status]);
+
+      const final = await pollTryOnRequest(created.id, (update) => {
+        setAnalysisStatus(update.status, STATUS_LABELS[update.status]);
+      });
+
+      if (final.status === "failed" || !final.readiness) {
+        failAnalysis(
+          final.error_message ?? "We couldn't analyze your photo. Please try again with a different photo."
+        );
+        return;
+      }
+      finishAnalyzingWithReadiness(final.readiness);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Something went wrong analyzing your photo.";
+      failAnalysis(message);
+    }
   }
 
   function handleTryOn() {
@@ -114,7 +171,12 @@ export default function TryOnStudioPage() {
               </>
             )}
 
-            {state === "capturing" && <CaptureSourceSelector onCapture={handleCapture} />}
+            {state === "capturing" && (
+              <>
+                <PhotoGuidance />
+                <CaptureSourceSelector onCapture={handleCapture} />
+              </>
+            )}
 
             {state === "previewing" && capturedImageUrl && (
               <>
@@ -129,9 +191,77 @@ export default function TryOnStudioPage() {
                     Captured via {capturedPhoto.source === "camera" ? "device camera" : "file upload"}
                   </p>
                 )}
+                <p className="max-w-sm text-xs text-neutral-500">
+                  Review your photo before continuing — you can retake it if your face,
+                  ears, shoulders, or hands aren&apos;t clearly visible.
+                </p>
                 <div className="flex gap-3">
                   <Button variant="secondary" onClick={startCapturing}>
                     Retake
+                  </Button>
+                  <Button onClick={handleAnalyzePhoto}>Use this photo</Button>
+                </div>
+              </>
+            )}
+
+            {state === "analyzing" && (
+              <>
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-900 dark:border-neutral-700 dark:border-t-amber-400" />
+                <p className="text-sm text-neutral-500">
+                  {analysisStatusLabel ?? "Checking your photo…"}
+                </p>
+                <p className="max-w-sm text-xs text-neutral-400">
+                  This checks what&apos;s visible in your photo (face, ears, shoulders,
+                  hands) — no jewellery is placed yet.
+                </p>
+              </>
+            )}
+
+            {state === "analysis_failed" && (
+              <>
+                <p className="max-w-sm text-sm text-red-600 dark:text-red-400">
+                  {analysisError ?? "We couldn't analyze your photo. Please try again."}
+                </p>
+                <div className="flex gap-3">
+                  <Button variant="secondary" onClick={startCapturing}>
+                    Retake photo
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {state === "readiness" && readiness && (
+              <>
+                <p className="text-neutral-600 dark:text-neutral-400">
+                  Here&apos;s what we could confidently detect in your photo:
+                </p>
+                <ul className="w-full max-w-sm space-y-1 text-left text-sm">
+                  <li>
+                    {readiness.ears_ready ? "✅" : "⚠️"} Earrings —{" "}
+                    {readiness.ears_ready
+                      ? "both ears clearly visible"
+                      : readiness.reasons.ears ?? "ears not clearly visible"}
+                  </li>
+                  <li>
+                    {readiness.neck_ready ? "✅" : "⚠️"} Necklace —{" "}
+                    {readiness.neck_ready
+                      ? "neck and shoulders visible"
+                      : readiness.reasons.neck ?? "neck/shoulders not clearly visible"}
+                  </li>
+                  <li>
+                    {readiness.hands_ready ? "✅" : "⚠️"} Rings / bangles —{" "}
+                    {readiness.hands_ready
+                      ? "hands visible"
+                      : readiness.reasons.hands ?? "hands not clearly visible"}
+                  </li>
+                </ul>
+                <p className="max-w-sm text-xs text-neutral-400">
+                  You can continue with categories marked ready, or retake the photo to
+                  improve the others.
+                </p>
+                <div className="flex gap-3">
+                  <Button variant="secondary" onClick={startCapturing}>
+                    Retake photo
                   </Button>
                   <Button onClick={() => useTryOnStore.setState({ state: "selecting_category" })}>
                     Continue
