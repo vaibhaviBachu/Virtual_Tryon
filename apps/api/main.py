@@ -1,8 +1,9 @@
 """
 FastAPI application factory.
 
-Milestone 1 scope: app wiring, health/readiness, logging, error handling, CORS.
-No jewellery/catalogue/try-on routers exist yet — see docs/roadmap.md Milestone 2+.
+Milestone 1: app wiring, health/readiness, logging, error handling, CORS.
+Milestone 2 adds: auth (login/me) and the catalogue routers (categories, jewellery,
+assets). No try-on routers exist yet — see docs/roadmap.md Milestone 4+.
 """
 import logging
 from contextlib import asynccontextmanager
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apps.api.core.config import get_settings
 from apps.api.core.logging import configure_logging
 from apps.api.core.middleware import RequestIDMiddleware, register_exception_handlers
-from apps.api.v1.routers import health
+from apps.api.v1.routers import auth, catalog, health
 
 settings = get_settings()
 configure_logging(settings.LOG_LEVEL)
@@ -48,7 +49,8 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     app.include_router(health.router)
-    # Milestone 2+: app.include_router(catalog.router, prefix="/api/v1")
+    app.include_router(auth.router)
+    app.include_router(catalog.router)
     # Milestone 3+: app.include_router(uploads.router, prefix="/api/v1")
     # Milestone 4+: app.include_router(tryon.router, prefix="/api/v1")
 
