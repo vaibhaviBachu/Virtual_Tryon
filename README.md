@@ -1,0 +1,142 @@
+# Jewellery Virtual Try-On Platform
+
+A production-oriented web platform for photorealistic virtual jewellery try-on: a
+customer photographs or uploads a picture of themselves, browses a jewellery catalogue,
+and sees the *actual* selected piece placed on their photo.
+
+**Current milestone: Milestone 1 — Platform Foundation.** See [Current status](#current-status)
+below for exactly what is and is not implemented yet.
+
+## Architecture at a glance
+
+```
+apps/web      Next.js + TypeScript frontend (landing page, Try-On Studio, admin shell)
+apps/api      FastAPI backend — HTTP layer only, never runs AI inference in-request
+ai/           Try-on engine abstraction + CV modules (no AI implemented yet — Milestone 4+)
+workers/      Independent worker process (heartbeat now; job consumer in Milestone 4+)
+evaluation/   Placement/quality evaluation harness and datasets (Milestone 4+)
+infrastructure/  nginx/deployment config (not used yet at this milestone)
+docs/         Architecture, research, and process documentation
+```
+
+Full architecture rationale: [`docs/architecture.md`](docs/architecture.md). AI/model
+research and licensing: [`docs/ai-research.md`](docs/ai-research.md) and
+[`docs/model-comparison.md`](docs/model-comparison.md). Security/privacy/cost analysis:
+[`docs/production-readiness.md`](docs/production-readiness.md). Milestone plan:
+[`docs/roadmap.md`](docs/roadmap.md).
+
+## Prerequisites
+
+- Docker Engine + Docker Compose v2 (`docker compose version`)
+- For running things outside Docker: Node.js 22+, Python 3.11+, `pip`
+
+## Environment variables
+
+Copy `.env.example` to `.env` and adjust as needed:
+
+```bash
+cp .env.example .env
+```
+
+Every port, credential, and URL the application uses is read from environment
+variables — see `.env.example` for the full list and `docs/architecture.md` §2 for why
+local ports start at 2001 instead of common defaults (3000/5432/6379/8000/9000, ...).
+
+| Variable | Purpose |
+|---|---|
+| `WEB_PORT`, `API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `MINIO_PORT`, `MINIO_CONSOLE_PORT`, `WORKER_PORT` | Local host port bindings |
+| `DATABASE_URL` | Postgres connection string (container-internal, used by api/worker) |
+| `REDIS_URL` | Redis connection string |
+| `MINIO_*` | Object storage endpoint/credentials/bucket (S3-compatible; swap for AWS S3/Cloudflare R2 in production without code changes) |
+| `JWT_*` | Auth token configuration (architecture is ready; no route enforces auth yet) |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins |
+| `NEXT_PUBLIC_API_URL` | API base URL baked into the frontend build |
+
+## Running locally (Docker Compose)
+
+```bash
+cp .env.example .env
+docker compose build
+docker compose up
+```
+
+Once healthy:
+
+- Web: http://localhost:2001
+- API: http://localhost:2002 (docs at `/docs`, health at `/health`, readiness at `/ready`)
+- Worker health: http://localhost:2007/health
+- MinIO console: http://localhost:2006
+
+> **Known limitation of this development sandbox:** the Docker images for this stack
+> (`python:3.11-slim`, `postgres:16-alpine`, `redis:7-alpine`, `minio/minio`,
+> `node:22-slim`) could not be pulled from inside the cloud sandbox this was built in —
+> its outbound network policy blocks all container registries (Docker Hub, GHCR, GCR,
+> Quay, MCR, ECR Public all returned `403`). `docker compose build`/`up` were therefore
+> **not** run end-to-end in that sandbox. Everything Docker-independent was verified for
+> real instead (see [`docs/development.md`](docs/development.md) "How Milestone 1 was
+> verified" for the full, honest account): the FastAPI app, the worker process, and the
+> Alembic migration were run directly against a real local PostgreSQL and Redis (native
+> processes) plus an S3-compatible mock, and `/health`/`/ready` were confirmed to report
+> real dependency state, including degrading correctly when Postgres was stopped and
+> recovering when it came back. `docker compose config` validates the compose file
+> syntactically. **Running `docker compose build && docker compose up` on a normal
+> developer machine with standard internet access is the first verification step for
+> anyone picking this up**, since it was not possible in the build sandbox.
+
+## Development commands
+
+Backend (from repo root, with a virtualenv active):
+```bash
+pip install -r apps/api/requirements.txt -r workers/requirements.txt
+pytest                      # runs apps/api/tests, ai/tests, workers/tests (pytest.ini)
+alembic -c apps/api/alembic.ini upgrade head
+uvicorn apps.api.main:app --reload --port 2002
+```
+
+Frontend (from `apps/web`):
+```bash
+npm install
+npm run dev      # http://localhost:3000 in dev mode (docker-compose maps 2001 -> 3000)
+npm run lint
+npm run test      # vitest
+npm run build
+```
+
+See [`docs/development.md`](docs/development.md) for the full development workflow and
+[`docs/deployment.md`](docs/deployment.md) for staging/production deployment guidance.
+
+## Current status
+
+**Implemented (Milestone 1):**
+- Monorepo scaffold matching `docs/architecture.md`
+- FastAPI app with structured JSON logging, request-ID propagation, centralized error
+  handling, CORS, `/health` (liveness) and `/ready` (Postgres + Redis + object storage
+  checks)
+- SQLAlchemy + Alembic wired to Postgres with a baseline migration (no application
+  tables yet — that's Milestone 2)
+- Redis client wrapper (infrastructure only — no queue/rate-limit logic yet)
+- S3-compatible object storage abstraction (works against MinIO or real S3/R2 unmodified)
+- Independent worker process with a Redis-backed heartbeat and its own `/health`/`/ready`
+- `TryOnEngine` abstraction + registry with a `NotImplementedEngine` placeholder that
+  honestly reports "not implemented" rather than fabricating a result
+- `ai/models/LICENSES.md` model license registry, pre-populated from Milestone 0 research
+- Next.js frontend: landing page, Try-On Studio state machine (placeholder data, real
+  camera capture component with upload fallback), admin shell
+- Docker Compose definition for all 6 services with health checks and persistent volumes
+- Backend/AI/worker pytest suite (21 tests) and frontend Vitest suite (5 tests), all
+  passing; ESLint clean; production frontend build succeeds
+
+**Planned, not implemented yet:**
+- Jewellery catalogue, asset upload/processing (Milestone 2)
+- Real image upload/validation pipeline, landmark/segmentation integration (Milestone 3)
+- Geometry try-on engine (Milestone 4)
+- Additional categories + generative-AI evaluation gate (Milestone 5)
+- Occlusion/shadow quality pass (Milestone 6)
+- Full auth enforcement, rate limiting, retention policies, CI/CD (Milestone 7)
+
+**Known issues:**
+- `docker compose build`/`up` unverified in this sandbox (see above) — verify on a
+  machine with normal internet access before relying on it.
+- Google Fonts (`next/font/google`) could not be used for the same registry/egress
+  reason and was replaced with a system font stack; revisit with self-hosted webfonts
+  during the Milestone 7 branding pass if a custom typeface is wanted.

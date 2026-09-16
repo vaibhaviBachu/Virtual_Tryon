@@ -1,0 +1,49 @@
+# --- Secrets ---
+.env
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+.venv-check/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- Docker / infra local state ---
+infrastructure/docker/volumes/
+
+# --- AI models & large data (never committed — see ai/models/LICENSES.md) ---
+ai/models/weights/
+*.pt
+*.onnx
+*.safetensors
+
+# --- Evaluation datasets / user photos (never committed) ---
+evaluation/data/
+evaluation/users/*/*
+!evaluation/users/*/.gitkeep
+evaluation/jewellery/*/*
+!evaluation/jewellery/*/.gitkeep
+evaluation/expected/*
+!evaluation/expected/.gitkeep
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# --- Logs ---
+*.log
