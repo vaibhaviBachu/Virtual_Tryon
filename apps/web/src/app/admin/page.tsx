@@ -4,9 +4,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 const PLANNED_SECTIONS = [
-  { name: "Catalogue management", milestone: "Milestone 2" },
-  { name: "Asset upload & processing status", milestone: "Milestone 2" },
-  { name: "Category management", milestone: "Milestone 2" },
   { name: "Try-on history", milestone: "Milestone 4+" },
   { name: "Basic analytics", milestone: "Milestone 7" },
   { name: "System status", milestone: "Milestone 1 (below)" },
@@ -25,12 +22,22 @@ export default function AdminPlaceholderPage() {
       <Card className="mb-8">
         <CardContent>
           <p className="text-sm text-neutral-600 dark:text-neutral-400">
-            This is a placeholder application shell. Admin authentication and every
-            feature below are <strong>not implemented yet</strong> — they are scoped to
-            later milestones per <code>docs/roadmap.md</code>.
+            Catalogue management (categories, jewellery items, and asset processing) is
+            implemented — see <strong>Catalogue</strong> below. Everything else on this
+            page is <strong>not implemented yet</strong> and is scoped to later
+            milestones per <code>docs/roadmap.md</code>.
           </p>
         </CardContent>
       </Card>
+
+      <div className="mb-3 flex items-center justify-between rounded-xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <span className="text-sm">
+          <Link href="/admin/catalogue" className="font-medium hover:underline">
+            Catalogue management
+          </Link>
+        </span>
+        <Badge>Milestone 2</Badge>
+      </div>
 
       <div className="grid gap-3">
         {PLANNED_SECTIONS.map((section) => (
