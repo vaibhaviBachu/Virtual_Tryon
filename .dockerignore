@@ -1,0 +1,17 @@
+# Keeps the build context small for every Dockerfile in this repo (all builds use
+# context: "." per docker-compose.yml so Postgres/Redis-style per-service .dockerignore
+# isn't possible — this root file is what actually applies).
+**/node_modules
+**/.next
+**/.venv
+**/.venv-check
+**/__pycache__
+**/*.pyc
+**/.git
+**/.pytest_cache
+**/.mypy_cache
+evaluation/data
+evaluation/users/*/*
+evaluation/jewellery/*/*
+ai/models/weights
+*.log
