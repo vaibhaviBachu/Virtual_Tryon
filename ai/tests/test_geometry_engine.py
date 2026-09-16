@@ -139,6 +139,101 @@ def test_necklace_renders_successfully_on_real_pose_photo(pose_landmarker):
     assert placements[0]["anchor"]["success"] is True
 
 
+def test_necklace_result_differs_from_original_photo(pose_landmarker):
+    """Same real-pixel-diff check as test_earring_result_differs_from_original_photo,
+    but for necklace — a real "runtime, result looked identical to the original photo"
+    bug on a live deployment (physical_width_mm entered in the wrong unit, see
+    test_necklace_with_implausibly_small_physical_width_is_barely_visible below) slipped
+    through Milestone 4's original test suite specifically because no test asserted
+    this for the necklace category, only earrings."""
+    image = np.asarray(Image.open(POSE_IMAGE).convert("RGB"))
+    pose_result = pose_landmarker.detect(image)
+    assert pose_result.success is True
+
+    engine = GeometryTryOnEngine()
+    config = {
+        "category_slug": "necklace",
+        "face_landmarks": None,
+        "pose_landmarks": _serialize_pose(pose_result),
+    }
+    jpeg_bytes = _jpeg_bytes(image)
+    result = engine.render(jpeg_bytes, _necklace_asset_bytes(), config)
+    assert result.success is True, result.error_message
+    # Compare against the JPEG-decoded baseline (what the engine itself actually saw as
+    # its starting canvas), not the pre-compression array — otherwise ordinary JPEG
+    # compression noise across the whole photo would swamp the real, localized
+    # jewellery-compositing signal this test is meant to isolate.
+    baseline_rgb = np.asarray(Image.open(io.BytesIO(jpeg_bytes)).convert("RGB"))
+    out_rgb = np.asarray(Image.open(io.BytesIO(result.result_image_bytes)).convert("RGB"))
+    assert not np.array_equal(out_rgb, baseline_rgb)
+    changed_pixels = int(np.any(out_rgb != baseline_rgb, axis=2).sum())
+    assert changed_pixels > 50, (
+        f"Only {changed_pixels} pixels changed — the necklace is effectively invisible "
+        "in the rendered result."
+    )
+
+
+def test_necklace_with_implausibly_small_physical_width_is_barely_visible(pose_landmarker):
+    """Regression test for a real production bug: a catalogue item with
+    physical_width_mm set far too small (e.g. an admin entering the wrong unit) makes
+    ai.geometry.scale's physical-dimensions path compute a near-zero target width.
+    MIN_SCALE_FACTOR's safety clamp (ai/geometry/constants.py) still lets the render
+    report success, but the jewellery ends up only a few pixels wide — visually
+    indistinguishable from nothing having been rendered. This is now caught at
+    catalogue-data-entry time (see apps/api/v1/services/jewellery_service.py's
+    ImplausiblePhysicalDimensionError), but this test documents and pins the underlying
+    engine behavior directly, independent of that API-layer guard, using the exact
+    numbers this bug was reproduced with (evaluation.debug_necklace against a real
+    render): ~5-7 changed pixels at physical_width_mm=5 vs. ~1200+ at 180mm for the
+    identical asset/photo/pose."""
+    image = np.asarray(Image.open(POSE_IMAGE).convert("RGB"))
+    pose_result = pose_landmarker.detect(image)
+    assert pose_result.success is True
+    serialized_pose = _serialize_pose(pose_result)
+    asset_bytes = _necklace_asset_bytes()
+    jpeg_bytes = _jpeg_bytes(image)
+    baseline_rgb = np.asarray(Image.open(io.BytesIO(jpeg_bytes)).convert("RGB"))
+
+    engine = GeometryTryOnEngine()
+
+    implausible_result = engine.render(
+        jpeg_bytes,
+        asset_bytes,
+        {
+            "category_slug": "necklace",
+            "face_landmarks": None,
+            "pose_landmarks": serialized_pose,
+            "physical_width_mm": 5.0,
+        },
+    )
+    plausible_result = engine.render(
+        jpeg_bytes,
+        asset_bytes,
+        {
+            "category_slug": "necklace",
+            "face_landmarks": None,
+            "pose_landmarks": serialized_pose,
+            "physical_width_mm": 180.0,
+        },
+    )
+    assert implausible_result.success is True
+    assert plausible_result.success is True
+
+    implausible_out = np.asarray(Image.open(io.BytesIO(implausible_result.result_image_bytes)).convert("RGB"))
+    plausible_out = np.asarray(Image.open(io.BytesIO(plausible_result.result_image_bytes)).convert("RGB"))
+    implausible_changed = int(np.any(implausible_out != baseline_rgb, axis=2).sum())
+    plausible_changed = int(np.any(plausible_out != baseline_rgb, axis=2).sum())
+
+    # The point of this test is the RATIO, not fixed pixel counts (which depend on this
+    # image/asset's exact geometry) — a too-small physical width must produce
+    # dramatically fewer changed pixels than a plausible one for the identical asset,
+    # photo, and pose.
+    assert plausible_changed > implausible_changed * 20, (
+        f"plausible_changed={plausible_changed}, implausible_changed={implausible_changed} "
+        "— expected the plausible physical_width_mm to produce a far more visible render."
+    )
+
+
 def test_no_face_returns_structured_ear_not_visible_error():
     noise = (np.random.RandomState(1).rand(400, 400, 3) * 255).astype(np.uint8)
     engine = GeometryTryOnEngine()

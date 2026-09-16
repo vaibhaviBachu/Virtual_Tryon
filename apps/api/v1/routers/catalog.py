@@ -129,6 +129,8 @@ def create_jewellery(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=f"Slug '{payload.slug}' already exists."
         )
+    except jewellery_service.ImplausiblePhysicalDimensionError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return JewelleryResponse.model_validate(item)
 
 
@@ -154,6 +156,8 @@ def update_jewellery(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Jewellery not found.")
     except jewellery_service.CategoryNotFoundForJewelleryError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found.")
+    except jewellery_service.ImplausiblePhysicalDimensionError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return JewelleryResponse.model_validate(item)
 
 

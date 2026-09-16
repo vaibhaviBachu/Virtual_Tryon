@@ -11,6 +11,13 @@ def earrings_category_id(db_session):
     return str(row.id)
 
 
+@pytest.fixture()
+def necklace_category_id(db_session):
+    row = db_session.query(JewelleryCategory).filter(JewelleryCategory.slug == "necklace").first()
+    assert row is not None, "seed data missing: run the Milestone 2 migration first"
+    return str(row.id)
+
+
 def _cleanup_jewellery(db_session, jewellery_id):
     row = db_session.get(Jewellery, jewellery_id)
     if row:
@@ -189,3 +196,111 @@ def test_list_jewellery_search_matches_name_and_sku(admin_client, db_session, ea
         assert item_id in {item["id"] for item in by_sku.json()["items"]}
     finally:
         _cleanup_jewellery(db_session, item_id)
+
+
+# --- Physical-dimension plausibility validation (Milestone 4 runtime bug fix) ---
+#
+# Regression coverage for a real bug found on a live deployment: a necklace item
+# created with an implausibly small physical_width_mm (e.g. 5, from an admin entering
+# the wrong unit) makes ai.geometry.scale's physical-dimensions calibration path
+# compute a target width of only a few pixels — MIN_SCALE_FACTOR's safety clamp still
+# lets the render "succeed", but the jewellery is visually indistinguishable from not
+# being rendered at all. See apps/api/v1/services/jewellery_service.py's
+# _PHYSICAL_WIDTH_MM_RANGE_BY_CATEGORY docstring for the full account, including the
+# reproduced pixel-diff numbers that confirmed this mechanism.
+
+
+def test_create_necklace_rejects_implausibly_small_physical_width(admin_client, necklace_category_id, unique_suffix):
+    response = admin_client.post(
+        "/api/v1/catalog/jewellery",
+        json={
+            "category_id": necklace_category_id,
+            "name": "Implausible Necklace",
+            "slug": f"implausible-necklace-{unique_suffix}",
+            "sku": f"SKU-{unique_suffix}",
+            "physical_width_mm": 5.0,
+        },
+    )
+    assert response.status_code == 422
+    assert "physical_width_mm" in response.json()["detail"]
+
+
+def test_create_necklace_accepts_plausible_physical_width(admin_client, db_session, necklace_category_id, unique_suffix):
+    response = admin_client.post(
+        "/api/v1/catalog/jewellery",
+        json={
+            "category_id": necklace_category_id,
+            "name": "Plausible Necklace",
+            "slug": f"plausible-necklace-{unique_suffix}",
+            "sku": f"SKU-{unique_suffix}",
+            "physical_width_mm": 180.0,
+        },
+    )
+    try:
+        assert response.status_code == 201
+        assert response.json()["physical_width_mm"] == 180.0
+    finally:
+        _cleanup_jewellery(db_session, response.json()["id"])
+
+
+def test_create_jewellery_with_no_physical_width_is_unaffected(admin_client, db_session, necklace_category_id, unique_suffix):
+    """No physical_width_mm at all must keep working exactly as before this fix — the
+    engine's relative-scaling fallback (ai/geometry/scale.py) handles that case, and
+    this validation only fires when a value IS provided."""
+    response = admin_client.post(
+        "/api/v1/catalog/jewellery",
+        json={
+            "category_id": necklace_category_id,
+            "name": "No Dimensions Necklace",
+            "slug": f"no-dimensions-necklace-{unique_suffix}",
+            "sku": f"SKU-{unique_suffix}",
+        },
+    )
+    try:
+        assert response.status_code == 201
+        assert response.json()["physical_width_mm"] is None
+    finally:
+        _cleanup_jewellery(db_session, response.json()["id"])
+
+
+def test_update_necklace_rejects_implausibly_small_physical_width(
+    admin_client, db_session, necklace_category_id, unique_suffix
+):
+    create_response = admin_client.post(
+        "/api/v1/catalog/jewellery",
+        json={
+            "category_id": necklace_category_id,
+            "name": "Necklace To Update",
+            "slug": f"necklace-to-update-{unique_suffix}",
+            "sku": f"SKU-{unique_suffix}",
+            "physical_width_mm": 180.0,
+        },
+    )
+    item_id = create_response.json()["id"]
+    try:
+        update_response = admin_client.patch(
+            f"/api/v1/catalog/jewellery/{item_id}", json={"physical_width_mm": 15.0}
+        )
+        assert update_response.status_code == 422
+        assert "physical_width_mm" in update_response.json()["detail"]
+
+        # And the original, plausible value must be unchanged after the rejected update.
+        unchanged = admin_client.get(f"/api/v1/catalog/jewellery/{item_id}")
+        assert unchanged.json()["physical_width_mm"] == 180.0
+    finally:
+        _cleanup_jewellery(db_session, item_id)
+
+
+def test_create_earring_rejects_implausibly_large_physical_width(admin_client, earrings_category_id, unique_suffix):
+    response = admin_client.post(
+        "/api/v1/catalog/jewellery",
+        json={
+            "category_id": earrings_category_id,
+            "name": "Implausible Earring",
+            "slug": f"implausible-earring-{unique_suffix}",
+            "sku": f"SKU-{unique_suffix}",
+            "physical_width_mm": 500.0,
+        },
+    )
+    assert response.status_code == 422
+    assert "physical_width_mm" in response.json()["detail"]

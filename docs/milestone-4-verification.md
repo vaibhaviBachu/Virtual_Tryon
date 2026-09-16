@@ -459,6 +459,55 @@ isolation. The result page only ever fetches/shows `result_image_url`.
   quality, correct alpha-bbox cropping (Milestone 2), and the anthropometric scale
   assumption (§6); occlusion and lighting/shadow realism are Milestone 6 scope.
 
+## 22a. Real-deployment runtime fixes (post-verification, found on a live Docker Compose run)
+
+Two real bugs surfaced only once this milestone was actually run against a live
+Docker Compose deployment with real catalogue data — neither was reproducible from the
+synthetic/CI-style evaluation above, since both are about how this milestone's code is
+*configured and fed data* in a real deployment, not about the geometry math itself.
+
+**1. Signed URLs used the Docker-internal MinIO hostname.** `docker-compose.yml` sets
+`MINIO_ENDPOINT=minio:9000` for the `api` service — resolvable only on the compose
+network, never from the user's browser. `S3CompatibleStorage.create_signed_url()` used
+to sign every URL against that same endpoint, so every try-on result/asset URL handed
+to the frontend was browser-unreachable, producing a broken-image icon regardless of
+whether rendering succeeded. Fixed with an optional `public_endpoint`/`public_secure`
+pair (`storage/s3_storage.py`, new `MINIO_PUBLIC_ENDPOINT`/`MINIO_PUBLIC_SECURE`
+settings in `apps/api/core/config.py`) — a second boto3 client used only for signing,
+pointed at the host-mapped MinIO port. All non-signing operations are unaffected.
+
+**2. A catalogue item with an implausibly small `physical_width_mm` renders an
+effectively invisible necklace.** `ai/geometry/scale.py`'s physical-dimensions
+calibration path computes `target_width_px` directly from `physical_width_mm`; an
+admin entering the wrong unit (e.g. `5` meaning 5cm, or a chain-length figure instead
+of the necklace's own width) produces a target width of only a few pixels.
+`MIN_SCALE_FACTOR`'s safety clamp (0.03, `ai/geometry/constants.py`) still lets the
+render report `success: true` — the necklace is simply too small to see, which looks
+identical to nothing having been rendered. Reproduced directly with
+`evaluation.debug_necklace` against a controlled test render: the identical
+asset/photo/pose produced 1224 changed pixels at `physical_width_mm=180` versus only
+5-7 at `physical_width_mm=5` or `15`.
+
+This is a data-entry problem, not a geometry bug — the fix is a category-aware
+plausibility check at catalogue create/update time
+(`apps/api/v1/services/jewellery_service.py`'s `_PHYSICAL_WIDTH_MM_RANGE_BY_CATEGORY`:
+necklace 30-600mm, earrings 3-150mm), returning a clear `422` with a message telling
+the admin to check the unit, rather than silently accepting a value that produces a
+broken-looking render. Regression coverage: `apps/api/tests/test_jewellery.py` (API
+validation) and `ai/tests/test_geometry_engine.py::
+test_necklace_with_implausibly_small_physical_width_is_barely_visible` (pins the
+underlying engine behavior directly, independent of the API guard).
+
+**New developer tool**: `python -m evaluation.debug_necklace --render-id <uuid>` (run
+inside the `worker` image/container, which has the cv2/mediapipe dependencies) re-runs
+a real, already-created `TryOnRender`'s exact pipeline and writes out the original
+photo, the processed catalogue asset (plain and over a contrasting checkerboard, to
+reveal a faint/near-invisible alpha mask), the composited result, the geometry debug
+overlay, and a full JSON report (alpha-channel/bbox stats, computed anchor/scale/
+rotation/transform, and a real pixel-difference comparison) — see that module's
+docstring for the full option list, including `--use-debug-asset` for isolating a
+pipeline bug from a catalogue-asset bug.
+
 ## 23. Files changed
 
 New: `apps/api/alembic/versions/20260919_0004_geometry_tryon.py`, `ai/geometry/
