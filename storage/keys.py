@@ -64,3 +64,17 @@ def segmentation_mask_key(request_id: uuid.UUID) -> str:
     artifacts on a shorter lifecycle than the original photo if desired, without a
     prefix-matching ambiguity."""
     return f"tryon-intermediate/{request_id}/segmentation_mask.png"
+
+
+def tryon_render_result_key(session_id: uuid.UUID, request_id: uuid.UUID) -> str:
+    """Milestone 4 (spec §24): `tryon/{session_id}/{request_id}/result/{uuid}.png`.
+    Private, never a public bucket — always accessed via a short-lived signed URL
+    generated on demand (apps/api/v1/services/tryon_service.py), never stored."""
+    return f"tryon/{session_id}/{request_id}/result/{uuid.uuid4()}.png"
+
+
+def tryon_render_debug_key(session_id: uuid.UUID, request_id: uuid.UUID) -> str:
+    """Internal/developer-only debug visualization (spec §27) — same private prefix
+    family as the result image, kept in its own `debug/` sub-path so it can never be
+    confused with (or accidentally served as) the customer-facing result."""
+    return f"tryon/{session_id}/{request_id}/debug/{uuid.uuid4()}.png"

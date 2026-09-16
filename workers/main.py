@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from workers.config import get_worker_settings
 from workers.heartbeat import Heartbeat
 from workers.tasks.process_jewellery_asset import run_consumer_loop
+from workers.tasks.process_tryon_render import run_consumer_loop as run_tryon_render_consumer_loop
 from workers.tasks.process_tryon_request import run_consumer_loop as run_tryon_consumer_loop
 
 logger = logging.getLogger("worker.main")
@@ -66,6 +67,16 @@ def _tryon_consumer_loop() -> None:
         logger.exception("Tryon request consumer loop crashed")
 
 
+def _tryon_render_consumer_loop() -> None:
+    # Milestone 4: yet another separate Redis connection/thread — a geometry render job
+    # must never be delayed by (or delay) photo analysis or catalogue asset processing.
+    consumer_redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        run_tryon_render_consumer_loop(consumer_redis_client, _stop_event, poll_timeout_seconds=5)
+    except Exception:
+        logger.exception("Tryon render consumer loop crashed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
@@ -82,12 +93,19 @@ async def lifespan(app: FastAPI):
     tryon_consumer_thread.start()
     logger.info("Tryon request processing consumer thread started")
 
+    tryon_render_consumer_thread = threading.Thread(
+        target=_tryon_render_consumer_loop, daemon=True, name="tryon-render-consumer"
+    )
+    tryon_render_consumer_thread.start()
+    logger.info("Tryon render processing consumer thread started")
+
     yield
 
     _stop_event.set()
     heartbeat_thread.join(timeout=5)
     consumer_thread.join(timeout=10)
     tryon_consumer_thread.join(timeout=15)
+    tryon_render_consumer_thread.join(timeout=15)
     logger.info("Worker heartbeat loop and consumer threads stopped")
 
 

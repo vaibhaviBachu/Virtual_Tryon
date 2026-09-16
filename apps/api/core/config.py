@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     # --- CORS ---
     CORS_ALLOWED_ORIGINS: str = Field(default="http://localhost:2001")
 
+    # --- Milestone 4: geometry try-on debug visualization (spec §27) ---
+    # Gates GET /api/v1/tryon/renders/{id}/debug, which returns placement anchors/
+    # bounding boxes/scale/rotation and a signed URL to the annotated debug image.
+    # Defaults on for development/test so it can be exercised, but must be turned off
+    # (set False) in any real production deployment — it is explicitly NOT meant for
+    # normal customers (spec §27: "do not expose to normal customers").
+    ENABLE_TRYON_DEBUG_VIZ: bool = Field(default=True)
+
     @field_validator("ENVIRONMENT")
     @classmethod
     def _validate_environment(cls, value: str) -> str:

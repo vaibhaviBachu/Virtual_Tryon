@@ -68,23 +68,30 @@ class GeometryTryOnEngine(TryOnEngine):
             )
 
         geometry_result.metrics["total_seconds"] = round(time.monotonic() - t0, 4)
+        return self.adapt_result(geometry_result)
 
+    def adapt_result(self, geometry_result: TryOnRenderResult) -> RenderResult:
+        """Adapts the richer internal `TryOnRenderResult` into the shared
+        `ai.engines.base.RenderResult` contract. Public (not `_`-prefixed) because
+        workers/tasks/process_tryon_render.py calls `render_with_debug()` directly (to
+        obtain the debug visualization array alongside the normal result in a single
+        geometry computation, spec §27) and needs this same adaptation afterward."""
         if not geometry_result.success:
             return RenderResult(
                 success=False,
                 error_code=geometry_result.error_code,
                 error_message=geometry_result.error_message,
                 metrics=geometry_result.metrics,
-                placement_metadata=_serialize_placements(geometry_result.placements) or None,
+                placement_metadata={"placements": serialize_placements(geometry_result.placements)}
+                if geometry_result.placements
+                else None,
             )
 
-        result_png = _encode_png(geometry_result.result_image_rgba[:, :, :3])
+        result_png = encode_rgb_png(geometry_result.result_image_rgba[:, :, :3])
         placement_metadata: Dict[str, Any] = {
             "category_slug": geometry_result.category_slug,
-            "placements": _serialize_placements(geometry_result.placements),
+            "placements": serialize_placements(geometry_result.placements),
         }
-        if geometry_result.debug_image_rgb is not None:
-            placement_metadata["_debug_image_available"] = True
 
         return RenderResult(
             success=True,
@@ -261,14 +268,14 @@ def _null_rotation():
     return RotationResult(success=False, method="not_attempted_anchor_failed")
 
 
-def _encode_png(rgb_array: np.ndarray) -> bytes:
+def encode_rgb_png(rgb_array: np.ndarray) -> bytes:
     image = Image.fromarray(rgb_array, mode="RGB")
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=False)
     return buffer.getvalue()
 
 
-def _serialize_placements(placements: List[PlacementRecord]) -> List[Dict[str, Any]]:
+def serialize_placements(placements: List[PlacementRecord]) -> List[Dict[str, Any]]:
     serialized = []
     for placement in placements:
         entry: Dict[str, Any] = {
