@@ -30,6 +30,22 @@ class RenderResult:
     result_image_bytes: Optional[bytes] = None
     error_message: Optional[str] = None
     metrics: Dict[str, Any] = field(default_factory=dict)
+    # Milestone 4 addition: a structured, machine-readable failure reason (e.g.
+    # "EAR_NOT_VISIBLE") distinct from the safe human-readable `error_message` — see
+    # ai/engines/geometry/engine.py. Optional with a default so NotImplementedEngine
+    # and any future engine that never sets it remain valid, unmodified callers of this
+    # dataclass; this is additive, not a breaking change to the TryOnEngine contract.
+    error_code: Optional[str] = None
+    # Milestone 4 addition: geometry placement metadata (anchors, scale, rotation,
+    # transformed bounding box, assumptions) — see ai/geometry/schemas.py's
+    # TryOnRenderResult, which is GeometryTryOnEngine's own richer internal contract.
+    # This field is the boundary-crossing point: rather than replacing RenderResult
+    # (which would force every engine and every caller to change), one additional
+    # optional field carries the extra structure a geometry-based engine has that a
+    # future generative engine likely will not need in the same shape. Always a plain,
+    # JSON-serializable dict (no dataclasses/numpy arrays) so it can be persisted
+    # directly onto TryOnRender.placement_metadata without further conversion.
+    placement_metadata: Optional[Dict[str, Any]] = None
 
 
 class TryOnEngine(ABC):
