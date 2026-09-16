@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from workers.config import get_worker_settings
 from workers.heartbeat import Heartbeat
 from workers.tasks.process_jewellery_asset import run_consumer_loop
+from workers.tasks.process_tryon_request import run_consumer_loop as run_tryon_consumer_loop
 
 logger = logging.getLogger("worker.main")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -54,6 +55,17 @@ def _consumer_loop() -> None:
         logger.exception("Catalogue asset consumer loop crashed")
 
 
+def _tryon_consumer_loop() -> None:
+    # Separate Redis connection and separate thread from the catalogue-asset consumer
+    # above — a slow/blocked try-on job (real MediaPipe inference) must never delay
+    # catalogue asset processing or vice versa.
+    consumer_redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        run_tryon_consumer_loop(consumer_redis_client, _stop_event, poll_timeout_seconds=5)
+    except Exception:
+        logger.exception("Tryon request consumer loop crashed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
@@ -64,12 +76,19 @@ async def lifespan(app: FastAPI):
     consumer_thread.start()
     logger.info("Catalogue asset processing consumer thread started")
 
+    tryon_consumer_thread = threading.Thread(
+        target=_tryon_consumer_loop, daemon=True, name="tryon-request-consumer"
+    )
+    tryon_consumer_thread.start()
+    logger.info("Tryon request processing consumer thread started")
+
     yield
 
     _stop_event.set()
     heartbeat_thread.join(timeout=5)
     consumer_thread.join(timeout=10)
-    logger.info("Worker heartbeat loop and consumer thread stopped")
+    tryon_consumer_thread.join(timeout=15)
+    logger.info("Worker heartbeat loop and consumer threads stopped")
 
 
 app = FastAPI(title="jewellery-virtual-tryon-worker", lifespan=lifespan)

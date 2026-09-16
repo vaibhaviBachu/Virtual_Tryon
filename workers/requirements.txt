@@ -13,6 +13,20 @@ Pillow==10.4.0
 # NOT the try-on hot path — this only runs on admin catalogue asset uploads.
 rembg==2.0.59
 onnxruntime==1.19.2
+filetype==1.2.0
+
+# Milestone 3 — user photo landmark/segmentation pipeline (ai/landmarks/*,
+# ai/segmentation/person_segmenter.py). See ai/models/LICENSES.md for the full research
+# trail: mediapipe==0.10.9 is pinned specifically because it is the last release
+# shipping the "Solutions" API, whose .tflite weights are bundled in the wheel itself
+# (no runtime fetch from the network-blocked storage.googleapis.com host that the
+# current Tasks API depends on). protobuf is pinned <4 because 0.10.9 requires it;
+# rembg's onnxruntime dependency (above) was verified in this repo to still work
+# correctly at protobuf==3.20.3 for every operation this project performs — see
+# docs/milestone-3-verification.md for the exact verification commands.
+mediapipe==0.10.9
+protobuf==3.20.3
+numpy>=1.24,<3
 pytest==8.3.3
 httpx==0.27.2
 fakeredis==2.24.1

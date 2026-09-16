@@ -53,6 +53,27 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """Milestone 3: guest try-on sessions are a first-class, spec-required case (no
+    forced registration). Endpoints that must work for both guests and logged-in
+    customers depend on this instead of `get_current_user` — it returns None rather
+    than raising 401 when no/invalid credentials are supplied, and still returns the
+    real user when a valid token IS supplied (so an authenticated customer's session
+    can still be tied to their account for e.g. try-on history in a later milestone)."""
+    if credentials is None:
+        return None
+    try:
+        payload = decode_token(credentials.credentials)
+    except jwt.PyJWTError:
+        return None
+    if payload.get("type") != "access":
+        return None
+    return db.get(User, payload.get("sub"))
+
+
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != UserRole.admin:
         raise HTTPException(
