@@ -20,7 +20,7 @@ jewellery was actually placed:
                                                     checkerboard, so a faint/near-
                                                     invisible alpha mask is visible)
     <out-dir>/direct_geometry_result.png          (the composited result, produced
-                                                    directly by this script — proves the
+                                                    directly by this script -- proves the
                                                     engine itself works independent of
                                                     the frontend/API/signed-URL layer)
     <out-dir>/debug_necklace_geometry.png         (ai.geometry.debug_viz overlay: face/
@@ -35,25 +35,25 @@ And prints a human-readable report covering (spec checklist items 2, 3, 5, 6, 7)
   - computed anchor/scale/rotation/transform values for this exact render
   - a real pixel-difference comparison between the original photo and the generated
     result: changed-pixel count, percentage, bounding box of the changed region, max
-    per-channel difference — proving quantitatively whether anything was drawn, and if
+    per-channel difference -- proving quantitatively whether anything was drawn, and if
     so, roughly where
 
 --use-debug-asset swaps in a bundled, deliberately obvious, high-contrast synthetic
-necklace asset (bright red arc on a fully transparent background, generated in-code —
+necklace asset (bright red arc on a fully transparent background, generated in-code --
 never written into the customer catalogue) in place of the real catalogue asset, with
 its default (non-metadata) anchor. This isolates whether a problem is in the
 GeometryTryOnEngine/compositing pipeline itself (the debug asset would also fail to
 appear) or specific to this catalogue asset's own processed image (the debug asset
-would appear correctly while the real one does not) — spec checklist item 11.
+would appear correctly while the real one does not) -- spec checklist item 11.
 
-Never logs user image contents, credentials, or signed URLs — only the metadata above.
+Never logs user image contents, credentials, or signed URLs -- only the metadata above.
 """
 import argparse
 import io
 import json
 import os
 import sys
-import uuid
+import traceback
 from dataclasses import asdict
 
 import numpy as np
@@ -61,18 +61,17 @@ from PIL import Image, ImageDraw
 
 import ai.engines.geometry  # noqa: F401 - import side effect registers GeometryTryOnEngine
 from ai.engines.registry import get_engine
-from ai.geometry.asset_geometry import InvalidAssetError, compute_asset_geometry
+from ai.geometry.asset_geometry import InvalidAssetError
 from ai.geometry.body_reference import compute_body_reference_frame
 from ai.geometry.debug_viz import render_framing_debug_overlay
 from ai.geometry.framing import evaluate_necklace_framing
 from ai.landmarks.schemas import ConfidenceLevel, NormalizedPoint, PoseLandmarkResult
-from db.models import JewelleryAsset
 from jobqueue.render_jobs import TryOnRenderJob
 from workers.db import session_scope
 from workers.storage import get_object_storage
 from workers.tasks.process_tryon_render import _load_rows
 
-# Pixel channels must differ by more than this to count as "changed" — filters out
+# Pixel channels must differ by more than this to count as "changed" -- filters out
 # nothing here (the result PNG is freshly encoded from the same in-memory array as the
 # original, never re-compressed), but keeps the comparison honest against any future
 # lossy re-encode of either image.
@@ -82,7 +81,7 @@ CHANGED_PIXEL_THRESHOLD = 2
 def _pose_from_stored_dict(pose_dict: dict) -> PoseLandmarkResult:
     """Reconstructs the same PoseLandmarkResult ai.geometry.framing needs from the raw
     dict workers/tasks/process_tryon_request.py's _serialize_pose() persisted on
-    TryOnRequest.pose_landmarks — this is the exact stored data, not a re-run of pose
+    TryOnRequest.pose_landmarks -- this is the exact stored data, not a re-run of pose
     detection, so the framing pre-check reported here matches what actually happened
     for this real request."""
     landmarks = [
@@ -186,15 +185,15 @@ def _checkerboard_composite(asset_rgba: np.ndarray, tile: int = 10) -> Image.Ima
 
 
 def _build_debug_asset_bytes() -> bytes:
-    """A deliberately obvious, high-contrast, non-rectangular synthetic necklace —
+    """A deliberately obvious, high-contrast, non-rectangular synthetic necklace --
     bright solid red, fully opaque where drawn, fully transparent everywhere else,
     occupying a large, known fraction of its own canvas. Used only for isolating
-    pipeline bugs from catalogue-asset bugs (spec checklist item 11) — never written to
+    pipeline bugs from catalogue-asset bugs (spec checklist item 11) -- never written to
     the customer catalogue."""
     size = 300
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # A thick arc (chain) plus a filled circle (pendant) — an unambiguous, clearly
+    # A thick arc (chain) plus a filled circle (pendant) -- an unambiguous, clearly
     # non-rectangular visible shape covering a large, known portion of the canvas.
     draw.arc([40, 20, 260, 220], start=20, end=160, fill=(220, 0, 0, 255), width=18)
     draw.ellipse([120, 190, 180, 250], fill=(220, 0, 0, 255))
@@ -219,15 +218,79 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Defensive fix for this investigation: several print() calls in this file used
+    # non-ASCII punctuation (em-dashes, section signs). If this process's stdout ends
+    # up with a non-UTF-8 encoding (e.g. a minimal container locale, or how the output
+    # is piped through `docker compose exec` to a Windows terminal), a raw
+    # UnicodeEncodeError inside print() would abort the process right there -- and,
+    # depending on how the surrounding shell captures/pipes output, WITHOUT the
+    # traceback surviving in what gets shown, which looks exactly like "the command
+    # silently stops". All non-ASCII characters in this file's print() text have also
+    # been replaced with plain ASCII; this reconfigure is a second, independent safety
+    # net so a stray non-ASCII character can never again abort output silently --
+    # errors="replace" prints a substitute character instead of raising.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    except (AttributeError, ValueError):
+        pass  # older Python / non-standard stream; best-effort only.
+
     render_id = args.render_id
     out_dir = args.out_dir or os.path.join("/tmp/tryon_debug", render_id)
     os.makedirs(out_dir, exist_ok=True)
 
+    current_stage = "START"
+    try:
+        return _run(args, render_id, out_dir)
+    except Exception:
+        # Spec: "If the command is intentionally returning early ... DO NOT silently
+        # stop. Instead print the exact reason." This is the backstop for anything
+        # NOT already caught with a specific reason code inside _run(): print the
+        # full traceback (never swallow it) so the failing stage is always visible.
+        print(f"\n*** UNEXPECTED_EXCEPTION at stage: {current_stage} ***", flush=True)
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        return 1
+
+
+def _run(args, render_id: str, out_dir: str) -> int:
     fake_job = TryOnRenderJob(job_id="debug-cli", render_id=render_id, request_id="", enqueued_at=0)
     storage = get_object_storage()
 
+    print(f"[1/15] Loading render {render_id} from the database...", flush=True)
     with session_scope() as db:
-        render, request, jewellery, asset, user_image = _load_rows(db, fake_job)
+        try:
+            render, request, jewellery, asset, user_image = _load_rows(db, fake_job)
+        except Exception as exc:
+            print(f"\n*** MISSING_RENDER_METADATA: {exc} ***", flush=True)
+            print(
+                "The render/request/jewellery/user-image rows this render-id points to "
+                "could not all be loaded from the database. Verify the render-id with:\n"
+                "  docker compose exec postgres psql -U postgres -d jewellery_tryon "
+                "-c \"SELECT id, request_id, jewellery_id, asset_id, status FROM "
+                "tryon_renders WHERE id = '" + render_id + "';\"",
+                flush=True,
+            )
+            return 1
+        print("[2/15] Loading jewellery record...", flush=True)
+        print("[3/15] Loading processed necklace asset...", flush=True)
+        if asset is None:
+            print(
+                "\n*** MISSING_ASSET: no JewelleryAsset (processed, ready) was found for "
+                f"jewellery {jewellery.id} and this render did not pin a specific asset_id. ***",
+                flush=True,
+            )
+            print(
+                "Verify with:\n"
+                "  docker compose exec postgres psql -U postgres -d jewellery_tryon -c "
+                "\"SELECT id, asset_type, processing_status FROM jewellery_assets WHERE "
+                f"jewellery_id = '{jewellery.id}';\"",
+                flush=True,
+            )
+            if not args.use_debug_asset:
+                return 1
+            print("Continuing with --use-debug-asset (a synthetic asset), as requested.", flush=True)
 
         identity_report = {
             "render_id": str(render.id),
@@ -247,28 +310,71 @@ def main() -> int:
             "asset_attachment_point": asset.attachment_point if asset else None,
             "asset_mirrorable": asset.mirrorable if asset else None,
         }
-        print("=== Jewellery / asset identity ===")
-        print(json.dumps(identity_report, indent=2))
+        print("=== Jewellery / asset identity ===", flush=True)
+        print(json.dumps(identity_report, indent=2), flush=True)
+
+        # ROOT CAUSE of the diagnostic tool stopping after the framing pre-check
+        # section (investigated per this round's request): `request` is a SQLAlchemy
+        # ORM object bound to the `with session_scope() as db:` session below. That
+        # session's session_scope() calls db.commit() when the `with` block exits,
+        # which by default EXPIRES every already-loaded attribute on every ORM object
+        # from that session -- a later, unguarded `request.pose_landmarks` access
+        # AFTER the `with` block (which this file's necklace-calibration diagnostics
+        # added below) tries to lazily re-fetch it from a session that is already
+        # closed, raising sqlalchemy.orm.exc.DetachedInstanceError. That exception was
+        # never caught anywhere, so it aborted the process right where the user
+        # observed it stopping -- silently, from PowerShell's point of view, because
+        # nothing in this file printed a stage marker before then to show where it
+        # got to (now fixed by the [N/15] checkpoints throughout, and by no longer
+        # touching `request` after this point at all: every later use of the
+        # request's stored landmark JSON reads this same plain-dict copy instead,
+        # taken while the session is still open).
+        stored_pose_landmarks = request.pose_landmarks
+        stored_face_landmarks = request.face_landmarks
+        stored_readiness = request.readiness
+
+        print("[4/15] Loading stored pose/face landmarks for this request...", flush=True)
+        if not stored_pose_landmarks and identity_report["category_slug"] == "necklace":
+            print(
+                "\n*** MISSING_LANDMARKS: TryOnRequest.pose_landmarks is empty/null for this "
+                "request. The necklace anchor cannot be computed without it. ***",
+                flush=True,
+            )
+            print(
+                "Verify with:\n"
+                "  docker compose exec postgres psql -U postgres -d jewellery_tryon -c "
+                f"\"SELECT id, status, pose_landmarks IS NOT NULL AS has_pose FROM "
+                f"tryon_requests WHERE id = '{request.id}';\"",
+                flush=True,
+            )
+            return 1
 
         framing_report = None
-        if identity_report["category_slug"] == "necklace" and request.pose_landmarks:
-            pose_for_framing = _pose_from_stored_dict(request.pose_landmarks)
+        pose_for_framing = None
+        if identity_report["category_slug"] == "necklace" and stored_pose_landmarks:
+            pose_for_framing = _pose_from_stored_dict(stored_pose_landmarks)
             framing_result = evaluate_necklace_framing(
                 pose_for_framing,
-                request.pose_landmarks.get("image_width_px", 0),
-                request.pose_landmarks.get("image_height_px", 0),
+                stored_pose_landmarks.get("image_width_px", 0),
+                stored_pose_landmarks.get("image_height_px", 0),
             )
             framing_report = framing_result.as_dict()
-            print("\n=== Pre-selection necklace framing pre-check (spec §3, §4) ===")
-            print(json.dumps(framing_report, indent=2))
+            print("\n=== Pre-selection necklace framing pre-check (spec Section 3, Section 4) ===", flush=True)
+            print(json.dumps(framing_report, indent=2), flush=True)
             print(
                 "This is the SAME early check now run right after photo analysis, "
-                "before any item is selected — it reasons only about the photo's own "
+                "before any item is selected -- it reasons only about the photo's own "
                 "geometry, not a specific asset. It is advisory: the per-asset "
-                "render-time JEWELLERY_OUT_OF_FRAME check below is still authoritative."
+                "render-time JEWELLERY_OUT_OF_FRAME check below is still authoritative.",
+                flush=True,
             )
 
-        user_image_bytes = storage.download(user_image.storage_key)
+        print("Loading original user image bytes from storage...", flush=True)
+        try:
+            user_image_bytes = storage.download(user_image.storage_key)
+        except Exception as exc:
+            print(f"\n*** MISSING_USER_IMAGE: could not download {user_image.storage_key!r}: {exc} ***", flush=True)
+            return 1
         real_asset_bytes = storage.download(asset.storage_key) if asset else None
 
         original_rgb_img = Image.open(io.BytesIO(user_image_bytes)).convert("RGB")
@@ -279,6 +385,7 @@ def main() -> int:
             Image.fromarray(framing_overlay, mode="RGB").save(
                 os.path.join(out_dir, "debug_necklace_framing_precheck.png")
             )
+        print("[5/15] Calculating the jewellery asset's actual alpha bounding box...", flush=True)
 
         alpha_report = None
         if real_asset_bytes is not None:
@@ -288,15 +395,18 @@ def main() -> int:
                 os.path.join(out_dir, "processed_asset_on_checkerboard.png")
             )
             alpha_report = _alpha_report(real_asset_rgba)
-            print("\n=== Processed catalogue asset: alpha-channel verification ===")
-            print(json.dumps(alpha_report, indent=2))
+            print("\n=== Processed catalogue asset: alpha-channel verification ===", flush=True)
+            print(json.dumps(alpha_report, indent=2), flush=True)
             print(
                 "See processed_asset_on_checkerboard.png: if the necklace is visible there "
                 "but not in direct_geometry_result.png below, the asset itself is fine and "
                 "the bug is in anchor/scale/rotation/compositing math. If it is NOT clearly "
                 "visible there either, the catalogue asset's background removal produced a "
-                "faint/incomplete mask (spec checklist item 3)."
+                "faint/incomplete mask (spec checklist item 3).",
+                flush=True,
             )
+
+        print("[6/15] Calculating the actual visible necklace content bounds (from the alpha bbox above)...", flush=True)
 
         if args.use_debug_asset:
             asset_bytes = _build_debug_asset_bytes()
@@ -305,11 +415,12 @@ def main() -> int:
             mirrorable = False
             print(
                 "\n*** --use-debug-asset: using a bundled synthetic test necklace instead of "
-                f"the real catalogue asset (asset {identity_report['asset_id']}). ***"
+                f"the real catalogue asset (asset {identity_report['asset_id']}). ***",
+                flush=True,
             )
         else:
             if real_asset_bytes is None:
-                print("\nNo processed asset available for this render — cannot proceed.")
+                print("\nNo processed asset available for this render -- cannot proceed.", flush=True)
                 return 1
             asset_bytes = real_asset_bytes
             asset_anchor_x = asset.anchor_x
@@ -317,41 +428,53 @@ def main() -> int:
             attachment_point = asset.attachment_point
             mirrorable = asset.mirrorable
 
+        print("[7/15] Calculating BODY_ANCHOR (from real pose landmarks) and", flush=True)
+        print("[8/15] JEWELLERY_ANCHOR (from the asset's own alpha bbox)...", flush=True)
+
         placement_config = {
             "category_slug": identity_report["category_slug"],
             "side": "both" if identity_report["category_slug"] == "earrings" else None,
-            "face_landmarks": request.face_landmarks,
-            "pose_landmarks": request.pose_landmarks,
+            "face_landmarks": stored_face_landmarks,
+            "pose_landmarks": stored_pose_landmarks,
             "asset_anchor_x": asset_anchor_x,
             "asset_anchor_y": asset_anchor_y,
             "attachment_point": attachment_point,
             "mirrorable": mirrorable,
             "physical_width_mm": identity_report["physical_width_mm"],
             "physical_height_mm": identity_report["physical_height_mm"],
-            "readiness": request.readiness,
+            "readiness": stored_readiness,
             "debug": True,
         }
+
+        print("[9/15] Calculating distance from the raw shoulder line to BODY_ANCHOR,", flush=True)
+        print("[10/15] visible necklace extent below JEWELLERY_ANCHOR,", flush=True)
+        print("[11/15] scale, [12/15] rotation, [13/15] transformed bounding box, and", flush=True)
+        print("[14/15] render-time out-of-frame status (all via the real GeometryTryOnEngine)...", flush=True)
 
         engine = get_engine("geometry")
         try:
             geometry_result = engine.render_with_debug(user_image_bytes, asset_bytes, placement_config)
         except InvalidAssetError as exc:
-            print(f"\nInvalidAssetError: {exc}")
+            print(f"\n*** MISSING_ASSET (InvalidAssetError): {exc} ***", flush=True)
+            return 1
+        except Exception as exc:
+            print(f"\n*** RENDER_EXCEPTION: engine.render_with_debug raised {type(exc).__name__}: {exc} ***", flush=True)
+            traceback.print_exc()
             return 1
 
         result = engine.adapt_result(geometry_result)
 
     body_frame_for_report = None
-    if identity_report["category_slug"] == "necklace" and request.pose_landmarks:
+    if identity_report["category_slug"] == "necklace" and stored_pose_landmarks:
         body_frame_for_report = compute_body_reference_frame(
-            pose_for_framing, request.pose_landmarks.get("image_width_px", 0), request.pose_landmarks.get("image_height_px", 0)
+            pose_for_framing, stored_pose_landmarks.get("image_width_px", 0), stored_pose_landmarks.get("image_height_px", 0)
         )
 
-    print("\n=== Geometry computation (this exact render) ===")
+    print("\n=== Geometry computation (this exact render) ===", flush=True)
     for i, placement in enumerate(geometry_result.placements):
-        # Calibration diagnostics (spec "NECKLACE GEOMETRY CALIBRATION" §1, §6, §10):
+        # Calibration diagnostics (spec "NECKLACE GEOMETRY CALIBRATION" Section 1, Section 6, Section 10):
         # make the vertical gap the collarbone offset introduces, and how far the
-        # necklace's own visible content extends below the anchor, explicit numbers —
+        # necklace's own visible content extends below the anchor, explicit numbers --
         # not something to eyeball from the rendered image alone.
         anchor_offset_from_shoulder_line_px = None
         if body_frame_for_report is not None and placement.anchor.anchor_px is not None:
@@ -387,31 +510,33 @@ def main() -> int:
             ),
             "necklace_visible_drop_below_anchor_px": necklace_visible_drop_below_anchor_px,
         }
-        print(f"--- placement[{i}] ---")
-        print(json.dumps(entry, indent=2))
+        print(f"--- placement[{i}] ---", flush=True)
+        print(json.dumps(entry, indent=2), flush=True)
         if anchor_offset_from_shoulder_line_px is not None:
             print(
                 f"    -> BODY_ANCHOR sits {anchor_offset_from_shoulder_line_px:.1f}px below the raw "
                 f"shoulder line (this IS the collarbone-offset calibration; compare against where "
-                "the collarbone actually appears in debug_necklace_geometry.png)."
+                "the collarbone actually appears in debug_necklace_geometry.png).",
+                flush=True,
             )
         if necklace_visible_drop_below_anchor_px is not None:
             print(
                 f"    -> The necklace's own visible (alpha) content extends "
                 f"{necklace_visible_drop_below_anchor_px:.1f}px BELOW the anchor point after scaling "
-                "— this is the asset's own drawn chain/pendant length, not the anchor offset itself. "
-                "A necklace that 'looks too low' can be caused by either number (or both) — this "
-                "report separates them so the real cause isn't guessed at."
+                "-- this is the asset's own drawn chain/pendant length, not the anchor offset itself. "
+                "A necklace that 'looks too low' can be caused by either number (or both) -- this "
+                "report separates them so the real cause isn't guessed at.",
+                flush=True,
             )
 
     if not result.success:
-        print(f"\nRENDER FAILED: error_code={result.error_code} message={result.error_message}")
+        print(f"\nRENDER FAILED: error_code={result.error_code} message={result.error_message}", flush=True)
         report = {"identity": identity_report, "alpha": alpha_report, "framing_precheck": framing_report,
                    "render_success": False,
                    "error_code": result.error_code, "error_message": result.error_message}
         with open(os.path.join(out_dir, "debug_report.json"), "w") as f:
             json.dump(report, f, indent=2)
-        print(f"\nFull report written to {out_dir}/debug_report.json")
+        print(f"\nFull report written to {out_dir}/debug_report.json", flush=True)
         return 1
 
     result_img = Image.open(io.BytesIO(result.result_image_bytes)).convert("RGB")
@@ -421,13 +546,22 @@ def main() -> int:
         Image.fromarray(geometry_result.debug_image_rgb, mode="RGB").save(
             os.path.join(out_dir, "debug_necklace_geometry.png")
         )
+        print(f"Wrote {out_dir}/debug_necklace_geometry.png", flush=True)
+    else:
+        print(
+            "\n*** debug_necklace_geometry.png was NOT generated: geometry_result.debug_image_rgb "
+            "is None even though placement_config['debug']=True was set and the render succeeded. "
+            "This should not happen -- please report this exact render-id. ***",
+            flush=True,
+        )
 
     original_rgb = np.asarray(original_rgb_img)
     result_rgb = np.asarray(result_img)
     diff_report = _pixel_diff_report(original_rgb, result_rgb)
 
-    print("\n=== Pixel-difference verification (original vs. generated result) ===")
-    print(json.dumps(diff_report, indent=2))
+    print("[15/15] Generating debug_necklace_geometry.png and finalizing report...", flush=True)
+    print("\n=== Pixel-difference verification (original vs. generated result) ===", flush=True)
+    print(json.dumps(diff_report, indent=2), flush=True)
     if diff_report.get("changed_pixel_count", 0) == 0:
         print(
             "\n*** RESULT IS PIXEL-IDENTICAL TO THE ORIGINAL. The jewellery was NOT "
@@ -439,7 +573,7 @@ def main() -> int:
     else:
         print(
             f"\n{diff_report['changed_pixel_count']} pixels changed "
-            f"({diff_report['changed_pixel_percent']}% of the image) — the engine did "
+            f"({diff_report['changed_pixel_percent']}% of the image) -- the engine did "
             "composite new content. Compare the changed_pixel_bounding_box above against "
             "the expected neck/upper-chest region, and inspect direct_geometry_result.png "
             "and debug_necklace_geometry.png directly to confirm it looks correct."
@@ -476,7 +610,7 @@ def main() -> int:
     }
     with open(os.path.join(out_dir, "debug_report.json"), "w") as f:
         json.dump(report, f, indent=2)
-    print(f"\nFull report and images written to {out_dir}/")
+    print(f"\nFull report and images written to {out_dir}/", flush=True)
     return 0
 
 
