@@ -26,6 +26,11 @@ COPY ai /srv/ai
 COPY db /srv/db
 COPY storage /srv/storage
 COPY jobqueue /srv/jobqueue
+# evaluation/: not imported by the running worker process itself, but this image is
+# where `python -m evaluation.debug_necklace` and `python -m evaluation.run_geometry`
+# must be run from (they need this image's cv2/mediapipe dependencies, which apps/api's
+# image deliberately does not have) — see evaluation/debug_necklace.py's docstring.
+COPY evaluation /srv/evaluation
 
 ENV PYTHONPATH=/srv \
     PYTHONUNBUFFERED=1
