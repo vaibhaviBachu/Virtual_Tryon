@@ -97,6 +97,31 @@ def test_necklace_anchor_fails_with_structured_code_when_no_pose():
     assert result.error_code == "NECK_NOT_VISIBLE"
 
 
+def test_necklace_length_none_and_medium_are_numerically_identical_to_unchanged_behavior():
+    """Calibration spec §4/§13: the necklace-length hook must not silently change
+    today's shipped anchor for the default/unspecified case."""
+    pose = _pose_with_shoulders()
+    baseline = compute_anchor("necklace", None, None, pose, IMAGE_W, IMAGE_H)
+    with_none = compute_anchor("necklace", None, None, pose, IMAGE_W, IMAGE_H, necklace_length=None)
+    with_medium = compute_anchor("necklace", None, None, pose, IMAGE_W, IMAGE_H, necklace_length="medium")
+
+    assert with_none.anchor_px.y == pytest.approx(baseline.anchor_px.y)
+    assert with_medium.anchor_px.y == pytest.approx(baseline.anchor_px.y)
+
+
+def test_necklace_length_short_and_long_are_distinct_but_uncalibrated_placeholders():
+    """These multipliers are explicitly documented in ai.geometry.constants as
+    UNCALIBRATED placeholders — this test only guards that the hook wires through
+    correctly (short < medium < long), not that the numbers are correct for any real
+    photo."""
+    pose = _pose_with_shoulders()
+    baseline = compute_anchor("necklace", None, None, pose, IMAGE_W, IMAGE_H)
+    short = compute_anchor("necklace", None, None, pose, IMAGE_W, IMAGE_H, necklace_length="short")
+    long_ = compute_anchor("necklace", None, None, pose, IMAGE_W, IMAGE_H, necklace_length="long")
+
+    assert short.anchor_px.y < baseline.anchor_px.y < long_.anchor_px.y
+
+
 def test_unsupported_category_returns_structured_error():
     result = compute_anchor("ring", None, None, None, IMAGE_W, IMAGE_H)
     assert result.success is False

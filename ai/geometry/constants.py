@@ -130,3 +130,25 @@ MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION = 0.3
 # insufficient while remaining loose enough not to reject photos with a comfortable
 # amount of visible upper chest.
 NECKLACE_MIN_REQUIRED_VERTICAL_SPACE_FRACTION = 0.35
+
+# --- Necklace-length-aware anchor offset (Milestone 4 stabilization: "NECKLACE
+# GEOMETRY CALIBRATION" spec §4) ---
+# Different necklace lengths (a short choker vs. a long haaram) should sit at
+# different vertical offsets from the shoulder line — a choker rests near the
+# collarbone, a long necklace hangs further down the chest. This table is
+# FORWARD-COMPATIBLE ARCHITECTURE ONLY: there is currently no catalogue field
+# capturing a necklace's length category, and this spec explicitly says not to
+# implement HAARAM yet, so every key below except "medium" is an UNCALIBRATED
+# placeholder ratio (not yet validated against any real photo) and nothing in this
+# codebase passes a non-None necklace_length yet — ai.geometry.anchors.compute_anchor
+# defaults to None, which maps to 1.0 (today's unchanged, already-shipped behavior).
+# Do not treat "short"/"long" as production-ready until they have been checked
+# against a real calibration dataset (spec §9) the way NECKLACE_ANCHOR_VERTICAL_
+# OFFSET_FRACTION itself was checked against this milestone's real production bug.
+NECKLACE_LENGTH_OFFSET_MULTIPLIER = {
+    None: 1.0,  # unknown/unspecified length -> today's existing, shipped behavior
+    "medium": 1.0,
+    "short": 0.7,  # UNCALIBRATED placeholder — a choker should sit higher, not yet proven
+    "long": 1.3,  # UNCALIBRATED placeholder — hangs lower, not yet proven
+    # "haaram" deliberately omitted: spec explicitly says do not implement it yet.
+}

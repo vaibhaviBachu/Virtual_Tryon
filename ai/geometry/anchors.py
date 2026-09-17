@@ -7,9 +7,11 @@ in ai/geometry receives/produces pixel coordinates already.
 """
 from typing import Optional
 
+from ai.geometry.body_reference import compute_body_reference_frame
 from ai.geometry.constants import (
     EAR_ANCHOR_VERTICAL_OFFSET_FRACTION,
     NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
+    NECKLACE_LENGTH_OFFSET_MULTIPLIER,
 )
 from ai.geometry.schemas import AnchorResult, Point
 from ai.landmarks.schemas import FaceLandmarkResult, PoseLandmarkResult
@@ -22,14 +24,22 @@ def compute_anchor(
     pose: Optional[PoseLandmarkResult],
     image_width_px: int,
     image_height_px: int,
+    necklace_length: Optional[str] = None,
 ) -> AnchorResult:
     """Category-specific BODY_ANCHOR derivation (spec §19: category-specific anchor
     models are expected, not a single generic rule). Every returned anchor_px is in the
-    user PHOTO's pixel space (image_width_px x image_height_px)."""
+    user PHOTO's pixel space (image_width_px x image_height_px).
+
+    `necklace_length` (spec "NECKLACE GEOMETRY CALIBRATION" §4 — SHORT_NECKLACE /
+    MEDIUM_NECKLACE / LONG_NECKLACE / HAARAM): forward-compatible hook only in this
+    task. There is currently no catalogue field feeding this, so it always defaults to
+    None (= "medium", today's unchanged behavior) — see
+    NECKLACE_LENGTH_OFFSET_MULTIPLIER's docstring for why the other lengths are not
+    yet assigned real, calibrated values."""
     if category_slug == "earrings":
         return _compute_ear_anchor(side, face, image_width_px, image_height_px)
     if category_slug == "necklace":
-        return _compute_necklace_anchor(pose, image_width_px, image_height_px)
+        return _compute_necklace_anchor(pose, image_width_px, image_height_px, necklace_length)
     return AnchorResult(
         success=False,
         error_code="UNSUPPORTED_CATEGORY",
@@ -92,42 +102,34 @@ def _compute_necklace_anchor(
     pose: Optional[PoseLandmarkResult],
     image_width_px: int,
     image_height_px: int,
+    necklace_length: Optional[str] = None,
 ) -> AnchorResult:
-    if pose is None or not pose.success or pose.neck_anchor is None:
+    frame = compute_body_reference_frame(pose, image_width_px, image_height_px)
+    if frame is None:
         return AnchorResult(
             success=False,
             error_code="NECK_NOT_VISIBLE",
             error_message="Shoulders/neck were not clearly detected in this photo, so a necklace anchor cannot be computed.",
         )
 
-    landmarks = pose.landmarks
-    if len(landmarks) < 13:
-        return AnchorResult(
-            success=False,
-            error_code="NECK_NOT_VISIBLE",
-            error_message="Pose landmarks did not include both shoulders.",
-        )
-
-    left_shoulder = landmarks[11]
-    right_shoulder = landmarks[12]
-    shoulder_width_px = abs(right_shoulder.x - left_shoulder.x) * image_width_px
-
-    raw_x_px = pose.neck_anchor.x * image_width_px
-    raw_y_px = pose.neck_anchor.y * image_height_px
+    length_multiplier = NECKLACE_LENGTH_OFFSET_MULTIPLIER.get(necklace_length, 1.0)
 
     # Documented correction (see constants.py's NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION
     # docstring): the shoulder midpoint sits at shoulder height, not at the
-    # collarbone/upper-chest resting point of a necklace — offset scaled by the
-    # measured shoulder width (a real, per-photo body-scale reference), not a fixed
-    # pixel constant.
+    # collarbone/upper-chest resting point of a necklace. The offset is built from the
+    # BodyReferenceFrame's own measured shoulder_midpoint_px, shoulder_width_px, and
+    # vertical_body_direction (spec "NECKLACE GEOMETRY CALIBRATION" §3) — never a fixed
+    # pixel constant or a value re-derived independently of that frame.
+    dx, dy = frame.vertical_body_direction
+    offset_px = NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * length_multiplier * frame.shoulder_width_px
     anchor_px = Point(
-        x=raw_x_px,
-        y=raw_y_px + NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * shoulder_width_px,
+        x=frame.shoulder_midpoint_px.x + dx * offset_px,
+        y=frame.shoulder_midpoint_px.y + dy * offset_px,
     )
 
     return AnchorResult(
         success=True,
         anchor_px=anchor_px,
-        reference_measurement_px=shoulder_width_px,
+        reference_measurement_px=frame.shoulder_width_px,
         method="pose_shoulder_midpoint_with_collarbone_offset",
     )

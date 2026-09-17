@@ -13,6 +13,7 @@ from typing import List
 import cv2
 import numpy as np
 
+from ai.geometry.body_reference import BodyReferenceFrame
 from ai.geometry.framing import FramingResult
 from ai.geometry.schemas import PlacementRecord
 
@@ -21,13 +22,40 @@ _BBOX_COLOR_BGR = (0, 200, 0)  # green
 _TEXT_COLOR_BGR = (255, 255, 0)  # cyan
 _VALID_REGION_COLOR_BGR = (0, 200, 0)  # green — required vertical space, framing OK
 _INSUFFICIENT_REGION_COLOR_BGR = (0, 0, 255)  # red — required vertical space, framing NOT OK
+_SHOULDER_COLOR_BGR = (255, 128, 0)  # orange — real detected landmarks
+_BODY_ANCHOR_COLOR_BGR = (0, 255, 255)  # yellow — BODY_ANCHOR (spec: distinct from raw shoulder line)
 
 
-def render_debug_overlay(base_image_rgb: np.ndarray, placements: List[PlacementRecord]) -> np.ndarray:
+def draw_body_reference_frame(canvas_bgr: np.ndarray, frame: BodyReferenceFrame) -> None:
+    """Mutates `canvas_bgr` in place: draws the two real shoulder landmarks, the line
+    between them (the raw shoulder-height reference), and the shoulder midpoint —
+    calibration spec §1/§11: 'shoulder landmarks... calculated neck reference' must be
+    visible in the debug image, distinct from the final BODY_ANCHOR (which includes the
+    documented collarbone offset and is drawn separately by the caller)."""
+    left = (int(round(frame.left_shoulder_px.x)), int(round(frame.left_shoulder_px.y)))
+    right = (int(round(frame.right_shoulder_px.x)), int(round(frame.right_shoulder_px.y)))
+    mid = (int(round(frame.shoulder_midpoint_px.x)), int(round(frame.shoulder_midpoint_px.y)))
+    cv2.circle(canvas_bgr, left, 6, _SHOULDER_COLOR_BGR, -1)
+    cv2.circle(canvas_bgr, right, 6, _SHOULDER_COLOR_BGR, -1)
+    cv2.line(canvas_bgr, left, right, _SHOULDER_COLOR_BGR, 2)
+    cv2.drawMarker(canvas_bgr, mid, _SHOULDER_COLOR_BGR, markerType=cv2.MARKER_DIAMOND, markerSize=10, thickness=2)
+
+
+def render_debug_overlay(
+    base_image_rgb: np.ndarray,
+    placements: List[PlacementRecord],
+    body_reference_frame: "BodyReferenceFrame | None" = None,
+) -> np.ndarray:
     """Returns a NEW RGB array (does not mutate `base_image_rgb`) with anchors,
     transformed bounding boxes, and a one-line scale/rotation label drawn for every
-    successfully-transformed placement."""
+    successfully-transformed placement. `body_reference_frame`, when given (necklace
+    calibration spec §1/§11), also draws the real detected shoulder landmarks/midpoint
+    distinctly from the final BODY_ANCHOR (which already includes the documented
+    collarbone offset) — making the offset itself visible in the image."""
     canvas_bgr = cv2.cvtColor(base_image_rgb, cv2.COLOR_RGB2BGR).copy()
+
+    if body_reference_frame is not None:
+        draw_body_reference_frame(canvas_bgr, body_reference_frame)
 
     for placement in placements:
         if placement.anchor.success and placement.anchor.anchor_px is not None:

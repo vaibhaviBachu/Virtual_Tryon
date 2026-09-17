@@ -27,6 +27,7 @@ from ai.geometry.anchors import compute_anchor
 from ai.geometry.asset_geometry import InvalidAssetError, compute_asset_geometry
 from ai.geometry.compositing import alpha_composite
 from ai.geometry.constants import MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION
+from ai.geometry.body_reference import compute_body_reference_frame
 from ai.geometry.debug_viz import render_debug_overlay
 from ai.geometry.deserialize import face_from_dict, pose_from_dict
 from ai.geometry.rotation import compute_rotation
@@ -288,7 +289,12 @@ class GeometryTryOnEngine(TryOnEngine):
 
         debug_image = None
         if tryon_input.debug:
-            debug_image = render_debug_overlay(user_image_rgb, placements)
+            # Calibration spec §1/§11: for necklace, also draw the raw shoulder
+            # landmarks/midpoint (BEFORE the documented collarbone offset) alongside
+            # the final BODY_ANCHOR that render_debug_overlay already draws, so it is
+            # immediately visible how much of a gap the offset itself introduces.
+            body_frame = compute_body_reference_frame(pose, image_width_px, image_height_px) if category_slug == "necklace" else None
+            debug_image = render_debug_overlay(user_image_rgb, placements, body_reference_frame=body_frame)
 
         return TryOnRenderResult(
             success=True,

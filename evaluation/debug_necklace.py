@@ -62,6 +62,7 @@ from PIL import Image, ImageDraw
 import ai.engines.geometry  # noqa: F401 - import side effect registers GeometryTryOnEngine
 from ai.engines.registry import get_engine
 from ai.geometry.asset_geometry import InvalidAssetError, compute_asset_geometry
+from ai.geometry.body_reference import compute_body_reference_frame
 from ai.geometry.debug_viz import render_framing_debug_overlay
 from ai.geometry.framing import evaluate_necklace_framing
 from ai.landmarks.schemas import ConfidenceLevel, NormalizedPoint, PoseLandmarkResult
@@ -340,8 +341,28 @@ def main() -> int:
 
         result = engine.adapt_result(geometry_result)
 
+    body_frame_for_report = None
+    if identity_report["category_slug"] == "necklace" and request.pose_landmarks:
+        body_frame_for_report = compute_body_reference_frame(
+            pose_for_framing, request.pose_landmarks.get("image_width_px", 0), request.pose_landmarks.get("image_height_px", 0)
+        )
+
     print("\n=== Geometry computation (this exact render) ===")
     for i, placement in enumerate(geometry_result.placements):
+        # Calibration diagnostics (spec "NECKLACE GEOMETRY CALIBRATION" §1, §6, §10):
+        # make the vertical gap the collarbone offset introduces, and how far the
+        # necklace's own visible content extends below the anchor, explicit numbers —
+        # not something to eyeball from the rendered image alone.
+        anchor_offset_from_shoulder_line_px = None
+        if body_frame_for_report is not None and placement.anchor.anchor_px is not None:
+            anchor_offset_from_shoulder_line_px = (
+                placement.anchor.anchor_px.y - body_frame_for_report.shoulder_midpoint_px.y
+            )
+        necklace_visible_drop_below_anchor_px = None
+        if placement.transform is not None and placement.anchor.anchor_px is not None:
+            _, _, _, transformed_bottom = placement.transform.transformed_bbox_px
+            necklace_visible_drop_below_anchor_px = transformed_bottom - placement.anchor.anchor_px.y
+
         entry = {
             "side": placement.side,
             "anchor_success": placement.anchor.success,
@@ -349,6 +370,10 @@ def main() -> int:
             "anchor_px": asdict(placement.anchor.anchor_px) if placement.anchor.anchor_px else None,
             "reference_measurement_px": placement.anchor.reference_measurement_px,
             "anchor_method": placement.anchor.method,
+            "shoulder_midpoint_px": (
+                asdict(body_frame_for_report.shoulder_midpoint_px) if body_frame_for_report else None
+            ),
+            "anchor_offset_from_shoulder_line_px": anchor_offset_from_shoulder_line_px,
             "scale_success": placement.scale.success,
             "scale_factor": placement.scale.scale_factor,
             "target_width_px": placement.scale.target_width_px,
@@ -360,9 +385,24 @@ def main() -> int:
             "transformed_bbox_px": (
                 list(placement.transform.transformed_bbox_px) if placement.transform else None
             ),
+            "necklace_visible_drop_below_anchor_px": necklace_visible_drop_below_anchor_px,
         }
         print(f"--- placement[{i}] ---")
         print(json.dumps(entry, indent=2))
+        if anchor_offset_from_shoulder_line_px is not None:
+            print(
+                f"    -> BODY_ANCHOR sits {anchor_offset_from_shoulder_line_px:.1f}px below the raw "
+                f"shoulder line (this IS the collarbone-offset calibration; compare against where "
+                "the collarbone actually appears in debug_necklace_geometry.png)."
+            )
+        if necklace_visible_drop_below_anchor_px is not None:
+            print(
+                f"    -> The necklace's own visible (alpha) content extends "
+                f"{necklace_visible_drop_below_anchor_px:.1f}px BELOW the anchor point after scaling "
+                "— this is the asset's own drawn chain/pendant length, not the anchor offset itself. "
+                "A necklace that 'looks too low' can be caused by either number (or both) — this "
+                "report separates them so the real cause isn't guessed at."
+            )
 
     if not result.success:
         print(f"\nRENDER FAILED: error_code={result.error_code} message={result.error_message}")
