@@ -504,6 +504,7 @@ def _run(args, render_id: str, out_dir: str) -> int:
             "scale_assumptions": placement.scale.assumptions,
             "rotation_degrees": placement.rotation.rotation_degrees,
             "rotation_method": placement.rotation.method,
+            "rotation_assumptions": placement.rotation.assumptions,
             "transform_matrix": placement.transform.matrix if placement.transform else None,
             "transformed_bbox_px": (
                 list(placement.transform.transformed_bbox_px) if placement.transform else None
@@ -526,6 +527,18 @@ def _run(args, render_id: str, out_dir: str) -> int:
                 "-- this is the asset's own drawn chain/pendant length, not the anchor offset itself. "
                 "A necklace that 'looks too low' can be caused by either number (or both) -- this "
                 "report separates them so the real cause isn't guessed at.",
+                flush=True,
+            )
+        if placement.rotation.assumptions:
+            for note in placement.rotation.assumptions:
+                print(f"    -> ROTATION NOTE: {note}", flush=True)
+            print(
+                f"    -> Final applied rotation_degrees={placement.rotation.rotation_degrees:.2f} "
+                "(read the ROTATION NOTE line(s) above -- if one mentions a clamp, the RAW estimate "
+                "it names is the real number computed from this photo's shoulder landmarks, before "
+                "the +/-25deg safety bound was applied; a raw estimate far beyond +/-25deg on what "
+                "looks like a frontal photo points at either a body-tilt this photo genuinely has, "
+                "or a landmark-detection problem -- not something to fix by changing the clamp).",
                 flush=True,
             )
 
