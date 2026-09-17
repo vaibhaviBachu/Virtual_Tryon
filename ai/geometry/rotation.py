@@ -103,8 +103,23 @@ def _compute_necklace_rotation(
 
     left = pose.landmarks[_LEFT_SHOULDER_IDX]
     right = pose.landmarks[_RIGHT_SHOULDER_IDX]
-    dx = (right.x - left.x) * image_width_px
-    dy = (right.y - left.y) * image_height_px
+    # Direction convention (root-caused during necklace geometry calibration, verified
+    # against a real render that came back with a raw estimate of -178.61deg on an
+    # ordinary frontal photo -- i.e. flipped ~180deg from the correct near-0deg answer):
+    # MediaPipe Pose landmarks 11/12 ("left_shoulder"/"right_shoulder") are the SUBJECT'S
+    # OWN anatomical left/right (see ai/landmarks/pose.py's docstring and
+    # ai/landmarks/schemas.py's "COORDINATE CONVENTION" note that this backend never
+    # mirrors or compensates for mirroring). For an ordinary, non-mirrored, front-facing
+    # photo, the subject's anatomical LEFT shoulder appears on the image's RIGHT side
+    # (larger x) and their anatomical RIGHT shoulder appears on the image's LEFT side
+    # (smaller x) -- the opposite of a screen-position "left has smaller x" assumption.
+    # The direction vector below therefore goes FROM the right-shoulder landmark TO the
+    # left-shoulder landmark, which is the orientation that yields ~0deg for an upright,
+    # untilted subject; using (right - left) instead (as this line previously did)
+    # computes a vector pointing the wrong way and reports rotation ~180deg away from the
+    # true tilt for every ordinary photo, which is why the -25deg clamp was being hit.
+    dx = (left.x - right.x) * image_width_px
+    dy = (left.y - right.y) * image_height_px
     raw_degrees = math.degrees(math.atan2(dy, dx))
     clamped = max(-MAX_NECKLACE_ROTATION_DEGREES, min(MAX_NECKLACE_ROTATION_DEGREES, raw_degrees))
 

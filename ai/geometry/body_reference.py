@@ -35,7 +35,17 @@ _RIGHT_SHOULDER_IDX = 12
 class BodyReferenceFrame:
     """A real, measured normalized body reference frame in the USER PHOTO's pixel
     space (spec §3's "left shoulder, right shoulder, shoulder midpoint, shoulder
-    width, vertical body direction")."""
+    width, vertical body direction").
+
+    NAMING NOTE: `left_shoulder_px`/`right_shoulder_px` are the SUBJECT'S OWN anatomical
+    left/right (MediaPipe Pose landmarks 11/12 -- see ai/landmarks/pose.py), not
+    screen-position labels. For an ordinary, non-mirrored, front-facing photo,
+    `left_shoulder_px` typically has the LARGER x (it appears on the image's right side)
+    and `right_shoulder_px` the smaller x. `shoulder_midpoint_px` and `shoulder_width_px`
+    are computed order-independently (midpoint/abs-difference) so this labeling doesn't
+    affect them, but ai.geometry.rotation's necklace rotation formula IS order-sensitive
+    and had a real ~180deg sign bug from assuming the opposite (screen-position)
+    convention -- see that module's docstring."""
 
     left_shoulder_px: Point
     right_shoulder_px: Point
