@@ -319,10 +319,17 @@ export default function TryOnStudioPage() {
                       : readiness.reasons.ears ?? "ears not clearly visible"}
                   </li>
                   <li>
-                    {readiness.neck_ready ? "✅" : "⚠️"} Necklace —{" "}
-                    {readiness.neck_ready
-                      ? "neck and shoulders visible"
-                      : readiness.reasons.neck ?? "neck/shoulders not clearly visible"}
+                    {/* Milestone 4 stabilization: prefer the combined necklace_ready
+                        signal (shoulders visible AND enough framing room for a typical
+                        necklace) when the backend provides it, so a badly-framed photo
+                        is flagged here — right after analysis — instead of only after
+                        the user has already picked a category and item. */}
+                    {(readiness.necklace_ready ?? readiness.neck_ready) ? "✅" : "⚠️"} Necklace —{" "}
+                    {(readiness.necklace_ready ?? readiness.neck_ready)
+                      ? "neck and shoulders visible with enough room to fit a necklace"
+                      : readiness.reasons.necklace_framing ??
+                        readiness.reasons.neck ??
+                        "neck/shoulders not clearly visible"}
                   </li>
                   <li>
                     {readiness.hands_ready ? "✅" : "⚠️"} Rings / bangles —{" "}

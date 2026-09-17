@@ -36,6 +36,7 @@ import redis
 from PIL import Image
 from sqlalchemy.orm import Session
 
+from ai.geometry.framing import evaluate_necklace_framing
 from ai.landmarks.face import FaceLandmarker
 from ai.landmarks.hand import HandLandmarker
 from ai.landmarks.pose import PoseLandmarker
@@ -296,8 +297,36 @@ def process_one_job(
         # --- Readiness ---
         t0 = time.monotonic()
         readiness = evaluate_readiness(face_result, hand_result, pose_result, seg_result)
+        readiness_dict = readiness.as_dict()
+
+        # Milestone 4 stabilization ("FIX NECKLACE FRAMING / PLACEMENT ROBUSTNESS" spec
+        # §3): move the necklace framing check EARLIER, right after this same analysis
+        # step, rather than only surfacing it after category/item selection at render
+        # time. This calls ai.geometry — the Milestone-4 layer built on top of
+        # ai.landmarks — which is why the call lives here in the worker orchestration
+        # layer rather than inside ai.landmarks.readiness itself (that module must stay
+        # free of any ai.geometry dependency; ai.geometry already depends the other way
+        # on ai.landmarks.schemas).
+        #
+        # `neck_ready` above keeps its original Milestone 3 meaning ("are shoulders
+        # confidently detected at all") completely unchanged. `necklace_ready` is a new,
+        # additional combined signal: confidently-detected AND framed with enough room
+        # below the anchor for a typical necklace (spec §4). Both are persisted so nothing
+        # already reading `neck_ready`/`reasons.neck` breaks.
+        framing_result = evaluate_necklace_framing(pose_result, image_rgb.shape[1], image_rgb.shape[0])
         timings.readiness_seconds += time.monotonic() - t0
-        request.readiness = readiness.as_dict()
+
+        readiness_dict["necklace_framing_ready"] = framing_result.ready
+        readiness_dict["necklace_ready"] = bool(readiness_dict["neck_ready"] and framing_result.ready)
+        if not framing_result.ready and framing_result.user_message:
+            readiness_dict.setdefault("reasons", {})
+            # Only surface the framing-specific reason when the more basic "are
+            # shoulders even visible" check already passed — otherwise `reasons.neck`
+            # (from evaluate_readiness above) is the more relevant, specific reason.
+            if readiness_dict["neck_ready"]:
+                readiness_dict["reasons"]["necklace_framing"] = framing_result.user_message
+        readiness_dict.setdefault("framing_metrics", {})["necklace"] = framing_result.as_dict()
+        request.readiness = readiness_dict
 
         request.confidence = {
             "face": face_result.detection_confidence if face_result.success else 0.0,

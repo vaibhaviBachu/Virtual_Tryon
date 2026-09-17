@@ -37,6 +37,14 @@ export interface ReadinessSummary {
   hands_ready: boolean;
   reasons: Record<string, string>;
   raw_confidences: Record<string, number>;
+  // Milestone 4 stabilization ("necklace framing"): moved the framing check earlier
+  // (right after analysis, before item selection). `necklace_ready` combines the
+  // original neck_ready (shoulders confidently detected) with this new framing signal
+  // (enough room below the anchor for a typical necklace) and is what the UI should
+  // prefer; both are optional so older cached responses without them still render.
+  necklace_framing_ready?: boolean;
+  necklace_ready?: boolean;
+  framing_metrics?: Record<string, unknown>;
 }
 
 export interface TryOnRequestResponse {

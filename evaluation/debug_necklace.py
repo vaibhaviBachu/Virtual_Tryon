@@ -62,6 +62,9 @@ from PIL import Image, ImageDraw
 import ai.engines.geometry  # noqa: F401 - import side effect registers GeometryTryOnEngine
 from ai.engines.registry import get_engine
 from ai.geometry.asset_geometry import InvalidAssetError, compute_asset_geometry
+from ai.geometry.debug_viz import render_framing_debug_overlay
+from ai.geometry.framing import evaluate_necklace_framing
+from ai.landmarks.schemas import ConfidenceLevel, NormalizedPoint, PoseLandmarkResult
 from db.models import JewelleryAsset
 from jobqueue.render_jobs import TryOnRenderJob
 from workers.db import session_scope
@@ -73,6 +76,32 @@ from workers.tasks.process_tryon_render import _load_rows
 # original, never re-compressed), but keeps the comparison honest against any future
 # lossy re-encode of either image.
 CHANGED_PIXEL_THRESHOLD = 2
+
+
+def _pose_from_stored_dict(pose_dict: dict) -> PoseLandmarkResult:
+    """Reconstructs the same PoseLandmarkResult ai.geometry.framing needs from the raw
+    dict workers/tasks/process_tryon_request.py's _serialize_pose() persisted on
+    TryOnRequest.pose_landmarks — this is the exact stored data, not a re-run of pose
+    detection, so the framing pre-check reported here matches what actually happened
+    for this real request."""
+    landmarks = [
+        NormalizedPoint(x=p["x"], y=p["y"], z=p.get("z"), visibility=p.get("visibility"))
+        for p in pose_dict.get("landmarks", [])
+    ]
+    neck_anchor_dict = pose_dict.get("neck_anchor")
+    neck_anchor = NormalizedPoint(x=neck_anchor_dict["x"], y=neck_anchor_dict["y"]) if neck_anchor_dict else None
+    return PoseLandmarkResult(
+        success=pose_dict.get("success", False),
+        error_message=pose_dict.get("error_message"),
+        image_width_px=pose_dict.get("image_width_px", 0),
+        image_height_px=pose_dict.get("image_height_px", 0),
+        landmarks=landmarks,
+        shoulder_confidence=pose_dict.get("shoulder_confidence", 0.0),
+        confidence_level=ConfidenceLevel(pose_dict.get("confidence_level", "none")),
+        neck_anchor=neck_anchor,
+        body_orientation=pose_dict.get("body_orientation"),
+        method=pose_dict.get("method", "mediapipe_pose_0.10.9"),
+    )
 
 
 def _alpha_report(asset_rgba: np.ndarray) -> dict:
@@ -220,11 +249,35 @@ def main() -> int:
         print("=== Jewellery / asset identity ===")
         print(json.dumps(identity_report, indent=2))
 
+        framing_report = None
+        if identity_report["category_slug"] == "necklace" and request.pose_landmarks:
+            pose_for_framing = _pose_from_stored_dict(request.pose_landmarks)
+            framing_result = evaluate_necklace_framing(
+                pose_for_framing,
+                request.pose_landmarks.get("image_width_px", 0),
+                request.pose_landmarks.get("image_height_px", 0),
+            )
+            framing_report = framing_result.as_dict()
+            print("\n=== Pre-selection necklace framing pre-check (spec §3, §4) ===")
+            print(json.dumps(framing_report, indent=2))
+            print(
+                "This is the SAME early check now run right after photo analysis, "
+                "before any item is selected — it reasons only about the photo's own "
+                "geometry, not a specific asset. It is advisory: the per-asset "
+                "render-time JEWELLERY_OUT_OF_FRAME check below is still authoritative."
+            )
+
         user_image_bytes = storage.download(user_image.storage_key)
         real_asset_bytes = storage.download(asset.storage_key) if asset else None
 
         original_rgb_img = Image.open(io.BytesIO(user_image_bytes)).convert("RGB")
         original_rgb_img.save(os.path.join(out_dir, "original_user_image.png"))
+
+        if framing_report is not None:
+            framing_overlay = render_framing_debug_overlay(np.asarray(original_rgb_img), framing_result)
+            Image.fromarray(framing_overlay, mode="RGB").save(
+                os.path.join(out_dir, "debug_necklace_framing_precheck.png")
+            )
 
         alpha_report = None
         if real_asset_bytes is not None:
@@ -313,7 +366,8 @@ def main() -> int:
 
     if not result.success:
         print(f"\nRENDER FAILED: error_code={result.error_code} message={result.error_message}")
-        report = {"identity": identity_report, "alpha": alpha_report, "render_success": False,
+        report = {"identity": identity_report, "alpha": alpha_report, "framing_precheck": framing_report,
+                   "render_success": False,
                    "error_code": result.error_code, "error_message": result.error_message}
         with open(os.path.join(out_dir, "debug_report.json"), "w") as f:
             json.dump(report, f, indent=2)
@@ -354,6 +408,7 @@ def main() -> int:
     report = {
         "identity": identity_report,
         "alpha": alpha_report,
+        "framing_precheck": framing_report,
         "render_success": True,
         "placements": [
             {

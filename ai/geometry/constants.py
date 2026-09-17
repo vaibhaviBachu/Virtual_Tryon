@@ -91,3 +91,42 @@ MAX_NECKLACE_ROTATION_DEGREES = 25.0
 # succeeds, while one pushed almost entirely off-canvas — as in the reproduced bug,
 # which had 0% overlap — fails honestly instead.
 MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION = 0.3
+
+# --- Pre-selection necklace framing pre-check (Milestone 4 stabilization: "FIX
+# NECKLACE FRAMING / PLACEMENT ROBUSTNESS" spec §3, §4, §5, §11) ---
+# ai.geometry.framing.evaluate_necklace_framing runs BEFORE the user has picked a
+# specific jewellery item, so — unlike MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION above,
+# which checks the ACTUAL selected asset's alpha bounding box — it has no real asset
+# geometry to measure against yet. It can only reason about the photo itself: how much
+# vertical space is available below the computed necklace BODY_ANCHOR before the photo
+# runs out.
+#
+# This constant expresses that minimum required space as a fraction of the SAME real,
+# per-photo measured shoulder-width (AnchorResult.reference_measurement_px) the
+# render-time engine will later use for scale — never a fixed pixel constant, so it
+# adapts to image resolution and subject distance automatically (spec §14, §15).
+#
+# Derivation (spec §5: "do not invent arbitrary values"): NECKLACE_RELATIVE_SCALE_OF_
+# SHOULDER_WIDTH above already fixes a typical necklace's default rendered WIDTH at
+# ~0.5x shoulder width when no catalogue physical_width_mm drives scale instead. A
+# typical short/medium necklace's visible vertical drop below the collarbone is smaller
+# than its own width (most catalogue necklaces are wider than they are tall in their
+# alpha bounding box), so 0.35 (70% of the 0.5 width fraction) is used as a deliberately
+# CONSERVATIVE, documented proxy for "enough room for a typical necklace to fit
+# vertically" — not a precise geometric guarantee for any specific asset.
+#
+# This is intentionally a HEURISTIC, advisory pre-check only (spec §11: "do not
+# overreject" — err toward ALLOW). The authoritative, per-asset decision remains
+# ai.engines.geometry.engine's MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION check against the
+# real selected asset's real alpha bounding box at render time; that check is
+# unchanged by this constant and always has the final say (spec: "DO NOT simply remove
+# the safety check").
+#
+# Calibrated against the real production bug this milestone's whole investigation
+# started from (see JEWELLERY_OUT_OF_FRAME's history above): that photo measured
+# shoulder_width_px=381.42 and had only ~-46px of space below the anchor (the anchor
+# itself was past the bottom edge) — required_vertical_space_px = 0.35 * 381.42 =
+# ~133.5px there, so this threshold correctly flags that exact real photo as
+# insufficient while remaining loose enough not to reject photos with a comfortable
+# amount of visible upper chest.
+NECKLACE_MIN_REQUIRED_VERTICAL_SPACE_FRACTION = 0.35
