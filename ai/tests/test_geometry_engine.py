@@ -14,6 +14,7 @@ from PIL import Image
 from ai.engines.geometry.engine import GeometryTryOnEngine
 from ai.landmarks.face import FaceLandmarker
 from ai.landmarks.pose import PoseLandmarker
+from ai.landmarks.schemas import ConfidenceLevel, NormalizedPoint, PoseLandmarkResult
 from workers.tasks.process_tryon_request import _serialize_face, _serialize_pose
 
 EVAL_USERS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "evaluation", "users")
@@ -250,6 +251,70 @@ def test_no_pose_returns_structured_neck_not_visible_error():
     result = engine.render(_jpeg_bytes(noise), _necklace_asset_bytes(), config)
     assert result.success is False
     assert result.error_code == "NECK_NOT_VISIBLE"
+
+
+def _pose_with_shoulders_near_bottom_edge(image_width_px: int, image_height_px: int) -> PoseLandmarkResult:
+    """Reproduces a real production bug directly and deterministically: shoulders
+    detected with good confidence (so readiness's neck_ready check, which only looks
+    at shoulder_confidence, passes) but positioned very close to the bottom edge of
+    the photo — common in webcam/laptop-camera captures framed close on the upper
+    body. NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION's documented collarbone offset then
+    pushes the computed anchor past the bottom edge entirely. Confirmed against a real
+    user photo in production: shoulder midpoint at normalized y=0.922 on a 640x480
+    photo produced a transformed bounding box entirely below the canvas (y 488-732 on
+    a 480px-tall image) and a render that reported success while being pixel-identical
+    to the original."""
+    landmarks = [NormalizedPoint(x=0.5, y=0.9, z=0.0, visibility=0.9) for _ in range(13)]
+    landmarks[11] = NormalizedPoint(x=0.3, y=0.97, z=0.0, visibility=0.95)
+    landmarks[12] = NormalizedPoint(x=0.7, y=0.97, z=0.0, visibility=0.95)
+    return PoseLandmarkResult(
+        success=True,
+        error_message=None,
+        image_width_px=image_width_px,
+        image_height_px=image_height_px,
+        landmarks=landmarks,
+        shoulder_confidence=0.95,
+        confidence_level=ConfidenceLevel.high,
+        neck_anchor=NormalizedPoint(x=0.5, y=0.97, z=0.0, visibility=0.95),
+        body_orientation="frontal",
+        method="test_fixture_shoulders_near_bottom_edge",
+    )
+
+
+def test_necklace_anchor_past_bottom_edge_fails_honestly_instead_of_silent_no_op():
+    """Regression test for a real production bug: rendering must not report success
+    when the computed jewellery placement falls (almost) entirely outside the photo —
+    see ai/geometry/transform.py's bbox_overlap_fraction and
+    ai/geometry/constants.py's MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION."""
+    image = np.zeros((480, 640, 3), dtype=np.uint8)
+    pose_result = _pose_with_shoulders_near_bottom_edge(640, 480)
+
+    engine = GeometryTryOnEngine()
+    config = {
+        "category_slug": "necklace",
+        "face_landmarks": None,
+        "pose_landmarks": _serialize_pose(pose_result),
+        "physical_width_mm": 180.0,
+    }
+    jpeg_bytes = _jpeg_bytes(image)
+    result = engine.render(jpeg_bytes, _necklace_asset_bytes(), config)
+
+    assert result.success is False
+    assert result.error_code == "JEWELLERY_OUT_OF_FRAME"
+
+    # And the same fixture with the shoulders comfortably in-frame must still succeed
+    # and visibly change pixels — proving this is specifically about the out-of-frame
+    # case, not a general regression in necklace rendering.
+    in_frame_pose = _pose_with_shoulders_near_bottom_edge(640, 480)
+    in_frame_pose.landmarks[11] = NormalizedPoint(x=0.4, y=0.45, z=0.0, visibility=0.95)
+    in_frame_pose.landmarks[12] = NormalizedPoint(x=0.6, y=0.45, z=0.0, visibility=0.95)
+    in_frame_pose.neck_anchor = NormalizedPoint(x=0.5, y=0.45, z=0.0, visibility=0.95)
+    in_frame_config = dict(config, pose_landmarks=_serialize_pose(in_frame_pose))
+    in_frame_result = engine.render(jpeg_bytes, _necklace_asset_bytes(), in_frame_config)
+    assert in_frame_result.success is True, in_frame_result.error_message
+    baseline_rgb = np.asarray(Image.open(io.BytesIO(jpeg_bytes)).convert("RGB"))
+    out_rgb = np.asarray(Image.open(io.BytesIO(in_frame_result.result_image_bytes)).convert("RGB"))
+    assert not np.array_equal(out_rgb, baseline_rgb)
 
 
 def test_unsupported_category_is_rejected():

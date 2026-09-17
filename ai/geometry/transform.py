@@ -108,6 +108,35 @@ def mirror_asset_geometry(
     return flipped, mirrored_geometry
 
 
+def bbox_overlap_fraction(
+    bbox: Tuple[float, float, float, float], image_width_px: int, image_height_px: int
+) -> float:
+    """What fraction of `bbox`'s own area actually falls within a
+    0,0 -> image_width_px,image_height_px canvas. Used by
+    ai.engines.geometry.engine to catch a real, previously-unhandled failure mode
+    (found on a live deployment, not hypothetical): an anchor derived from real
+    landmarks (ai.geometry.anchors) can legitimately land very close to an edge of the
+    photo — e.g. a webcam photo framed close on the face/shoulders, where the
+    necklace's documented collarbone-offset (NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
+    ai/geometry/constants.py) then pushes the placement entirely past the bottom edge.
+    `compute_transform`/`apply_transform`/`alpha_composite` all still "succeed" in that
+    case — cv2.warpAffine simply produces a fully-transparent result outside its output
+    canvas — producing a render that reports success but is pixel-identical to the
+    input. This function lets the caller detect that condition and fail honestly
+    instead (spec §21: "do not silently create a poor result")."""
+    left, top, right, bottom = bbox
+    overlap_left = max(left, 0.0)
+    overlap_top = max(top, 0.0)
+    overlap_right = min(right, float(image_width_px))
+    overlap_bottom = min(bottom, float(image_height_px))
+    overlap_width = max(overlap_right - overlap_left, 0.0)
+    overlap_height = max(overlap_bottom - overlap_top, 0.0)
+    overlap_area = overlap_width * overlap_height
+
+    bbox_area = max((right - left) * (bottom - top), 1e-9)
+    return overlap_area / bbox_area
+
+
 def _bbox_corners(bbox: Tuple[float, float, float, float]):
     left, top, right, bottom = bbox
     return [(left, top), (right, top), (left, bottom), (right, bottom)]

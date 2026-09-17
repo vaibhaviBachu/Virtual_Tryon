@@ -498,6 +498,41 @@ validation) and `ai/tests/test_geometry_engine.py::
 test_necklace_with_implausibly_small_physical_width_is_barely_visible` (pins the
 underlying engine behavior directly, independent of the API guard).
 
+**3. A confidently-detected but near-the-edge necklace anchor renders entirely
+off-canvas.** Found via `evaluation.debug_necklace` against the user's own real
+render: `neck_ready` (`ai/landmarks/readiness.py`) only checks
+`pose.shoulder_confidence` — it says nothing about WHERE in the frame the shoulders
+sit. A webcam photo framed close on the upper body can have shoulders confidently
+detected (readiness passes) but positioned very close to the bottom edge (in the
+reported case, a normalized shoulder-midpoint y of 0.922 on a 480px-tall photo).
+`NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION`'s documented collarbone offset then pushed
+the final anchor to y=526px — past the 480px bottom edge — so the transformed
+jewellery bounding box (y 488-732) landed entirely outside the photo.
+`cv2.warpAffine`/`alpha_composite` still "succeeded" in that case (a fully-transparent
+result outside the output canvas is not an error), so the render reported
+`success: true` while being pixel-identical to the original — exactly the "the result
+looks almost identical to my photo" symptom, this time on a real catalogue item with
+correct physical dimensions (180mm), ruling out fix #2 above as the explanation for
+this case.
+
+Fix: `ai/geometry/transform.py`'s new `bbox_overlap_fraction()` (a pure, independently
+tested function) measures what fraction of the transformed jewellery's own bounding
+box actually lands within the photo canvas. `ai/engines/geometry/engine.py` now
+checks this immediately after `compute_transform()`, before compositing; below
+`MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION` (0.3, `ai/geometry/constants.py`) the
+placement is treated as a real, structured failure (`JEWELLERY_OUT_OF_FRAME`, added to
+`workers/tasks/process_tryon_render.py`'s `_BLOCKED_ERROR_CODES`) instead of a silent
+no-op success. Verified by reproducing the user's exact reported numbers
+(shoulder-width 381.42px, computed anchor y=526.33 on a 480px-tall photo) through
+`evaluation.debug_necklace` against a controlled render: before the fix this
+"succeeded" with 0 changed pixels; after the fix it correctly reports
+`JEWELLERY_OUT_OF_FRAME`. Regression tests: `ai/tests/test_geometry_transform.py`
+(3 new tests for `bbox_overlap_fraction` itself, including the exact real-world bbox
+shape) and `ai/tests/test_geometry_engine.py::
+test_necklace_anchor_past_bottom_edge_fails_honestly_instead_of_silent_no_op` (also
+proves the same fixture succeeds normally when the shoulders are comfortably
+in-frame, isolating this to the out-of-frame case specifically).
+
 **New developer tool**: `python -m evaluation.debug_necklace --render-id <uuid>` (run
 inside the `worker` image/container, which has the cv2/mediapipe dependencies) re-runs
 a real, already-created `TryOnRender`'s exact pipeline and writes out the original

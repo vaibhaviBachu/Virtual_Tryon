@@ -72,3 +72,22 @@ MAX_SCALE_FACTOR = 8.0
 # right" number.
 MAX_EARRING_ROTATION_DEGREES = 20.0
 MAX_NECKLACE_ROTATION_DEGREES = 25.0
+
+# --- Minimum in-frame visibility (spec §21, §40) ---
+# Found on a real deployment (not hypothetical): a photo where the subject's shoulders
+# are confidently detected (readiness's neck_ready check only verifies
+# ai.landmarks.pose's shoulder_confidence — it says nothing about WHERE in the frame
+# the shoulders sit) but framed close to the bottom edge of the photo (common in
+# webcam/laptop-camera captures) can push the necklace anchor, after
+# NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION's documented collarbone offset, entirely
+# past the photo's bottom edge. cv2.warpAffine still "succeeds" in that case — it just
+# produces a fully-transparent result outside its output canvas — so the render
+# reports success while being pixel-identical (or nearly so) to the original photo.
+# ai.geometry.transform.bbox_overlap_fraction measures how much of the transformed
+# jewellery's own bounding box actually lands within the photo; below this fraction,
+# ai.engines.geometry.engine treats the placement as a real, structured failure
+# (JEWELLERY_OUT_OF_FRAME) instead of a silent no-op "success". 0.3 (30%) was chosen
+# so a jewellery item merely clipped at one edge (still recognizably visible) still
+# succeeds, while one pushed almost entirely off-canvas — as in the reproduced bug,
+# which had 0% overlap — fails honestly instead.
+MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION = 0.3

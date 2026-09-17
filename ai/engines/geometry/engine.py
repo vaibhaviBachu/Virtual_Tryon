@@ -16,7 +16,7 @@ geometrically transformed jewellery-asset pixel, alpha-composited on top.
 import io
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace as dataclass_replace
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -26,12 +26,13 @@ from ai.engines.base import RenderResult, TryOnEngine
 from ai.geometry.anchors import compute_anchor
 from ai.geometry.asset_geometry import InvalidAssetError, compute_asset_geometry
 from ai.geometry.compositing import alpha_composite
+from ai.geometry.constants import MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION
 from ai.geometry.debug_viz import render_debug_overlay
 from ai.geometry.deserialize import face_from_dict, pose_from_dict
 from ai.geometry.rotation import compute_rotation
 from ai.geometry.scale import compute_scale
 from ai.geometry.schemas import PlacementRecord, TryOnInput, TryOnRenderResult
-from ai.geometry.transform import apply_transform, compute_transform, mirror_asset_geometry
+from ai.geometry.transform import apply_transform, bbox_overlap_fraction, compute_transform, mirror_asset_geometry
 
 logger = logging.getLogger("ai.engines.geometry")
 
@@ -205,6 +206,49 @@ class GeometryTryOnEngine(TryOnEngine):
 
             t_transform = time.monotonic()
             transform = compute_transform(asset_geometry_for_side, anchor, scale, rotation, mirrored=mirror_needed)
+
+            # Real bug found on a live deployment: an anchor derived from real
+            # landmarks can legitimately fall very close to a photo's edge (e.g. a
+            # webcam photo framed close on the shoulders), and the documented
+            # collarbone/earlobe vertical offset (ai/geometry/constants.py) can then
+            # push the transformed jewellery almost or entirely off-canvas.
+            # apply_transform/alpha_composite below would still "succeed" in that case
+            # — cv2.warpAffine just produces a fully-transparent result outside its
+            # output canvas — silently producing a render that reports success but is
+            # pixel-identical to the input. Catch that here instead of after the fact.
+            overlap_fraction = bbox_overlap_fraction(
+                transform.transformed_bbox_px, image_width_px, image_height_px
+            )
+            if overlap_fraction < MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION:
+                out_of_frame_anchor = dataclass_replace(
+                    anchor,
+                    success=False,
+                    error_code="JEWELLERY_OUT_OF_FRAME",
+                    error_message=(
+                        "The computed position for this jewellery falls outside your "
+                        "photo. Please retake the photo with your neck and shoulders "
+                        "fully visible, not cropped close to the edge of the frame."
+                    ),
+                )
+                placements.append(
+                    PlacementRecord(side=side, anchor=out_of_frame_anchor, scale=scale, rotation=rotation, transform=None)
+                )
+                logger.info(
+                    "Placement skipped: transformed jewellery bounding box has "
+                    "insufficient overlap with the photo canvas",
+                    extra={
+                        "extra_fields": {
+                            "category": category_slug,
+                            "side": side,
+                            "overlap_fraction": round(overlap_fraction, 4),
+                            "transformed_bbox_px": list(transform.transformed_bbox_px),
+                            "image_width_px": image_width_px,
+                            "image_height_px": image_height_px,
+                        }
+                    },
+                )
+                continue
+
             warped = apply_transform(asset_rgba_for_side, transform, image_width_px, image_height_px)
             canvas_rgb = alpha_composite(canvas_rgb, warped)
             transform_seconds = time.monotonic() - t_transform

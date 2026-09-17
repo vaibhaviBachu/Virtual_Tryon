@@ -66,6 +66,12 @@ _BLOCKED_ERROR_CODES = {
     "ASSET_INVALID",
     "ASSET_NOT_READY",
     "REQUEST_NOT_READY",
+    # The computed placement fell (almost) entirely outside the photo — a real
+    # precondition failure (the photo doesn't show enough of the relevant body area
+    # in-frame for this jewellery to be placed), not an engine crash. See
+    # ai/geometry/transform.py's bbox_overlap_fraction and ai/geometry/constants.py's
+    # MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION for the full account.
+    "JEWELLERY_OUT_OF_FRAME",
 }
 
 

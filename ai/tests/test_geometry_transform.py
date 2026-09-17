@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from ai.geometry.schemas import AnchorResult, JewelleryAssetGeometry, Point, RotationResult, ScaleResult
-from ai.geometry.transform import apply_transform, compute_transform, mirror_asset_geometry
+from ai.geometry.transform import apply_transform, bbox_overlap_fraction, compute_transform, mirror_asset_geometry
 
 
 def _asset_geometry(anchor=(50.0, 20.0), bbox=(20, 10, 80, 60)):
@@ -100,3 +100,22 @@ def test_mirror_asset_geometry_flips_bbox_and_anchor_without_changing_shape():
     assert np.all(flipped[:, :12, 3] == 0)
     assert mirrored_geometry.alpha_bbox == (12, 0, 18, 10)
     assert mirrored_geometry.anchor_px.x == pytest.approx(20 - 5.0)
+
+
+def test_bbox_overlap_fraction_is_one_when_fully_inside_canvas():
+    assert bbox_overlap_fraction((10, 10, 50, 50), image_width_px=100, image_height_px=100) == pytest.approx(1.0)
+
+
+def test_bbox_overlap_fraction_is_zero_when_entirely_below_canvas():
+    """Reproduces the exact real-world shape found in production: a transformed
+    necklace bounding box (left, top, right, bottom) entirely past the bottom edge of
+    a 640x480 photo — see ai/geometry/constants.py's
+    MIN_JEWELLERY_VISIBLE_OVERLAP_FRACTION docstring for the full account."""
+    bbox = (220.8, 488.1, 462.6, 731.8)
+    assert bbox_overlap_fraction(bbox, image_width_px=640, image_height_px=480) == pytest.approx(0.0)
+
+
+def test_bbox_overlap_fraction_is_partial_when_straddling_an_edge():
+    # A 100x100 box straddling the right edge of a 100-wide canvas by half its width.
+    bbox = (50, 0, 150, 100)
+    assert bbox_overlap_fraction(bbox, image_width_px=100, image_height_px=200) == pytest.approx(0.5)
