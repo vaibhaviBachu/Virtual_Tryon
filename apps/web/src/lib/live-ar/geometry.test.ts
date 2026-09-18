@@ -13,6 +13,7 @@ import {
   computeNecklaceRotation,
   computeRotation,
   computeScale,
+  planCategoryRenders,
 } from "@/lib/live-ar/geometry";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, NormalizedPoint } from "@/lib/live-ar/types";
 
@@ -292,5 +293,41 @@ describe("buildLiveTransform", () => {
     const rotation = computeNecklaceRotation(pose, IMAGE_W, IMAGE_H);
     expect(scale.success).toBe(false);
     expect(buildLiveTransform(geometry, anchor, scale, rotation, false)).toBeNull();
+  });
+});
+
+describe("planCategoryRenders", () => {
+  it("plans a single necklace slot", () => {
+    const pose = poseWithShoulders(0, 1, 0.5);
+    const plans = planCategoryRenders("necklace", makeAssetGeometry(), null, pose, IMAGE_W, IMAGE_H);
+    expect(plans).toHaveLength(1);
+    expect(plans[0].slot).toBe("necklace");
+    expect(plans[0].transform).not.toBeNull();
+  });
+
+  it("plans both left and right earring slots", () => {
+    const face = faceWithEars();
+    const plans = planCategoryRenders("earrings", makeAssetGeometry(), face, null, IMAGE_W, IMAGE_H);
+    expect(plans.map((p) => p.slot)).toEqual(["left", "right"]);
+    expect(plans[0].transform).not.toBeNull();
+    expect(plans[1].transform).not.toBeNull();
+  });
+
+  it("mirrors the right earring's transform only when the asset is marked mirrorable", () => {
+    const face = faceWithEars();
+    const unmirrored = planCategoryRenders("earrings", makeAssetGeometry({ mirrorable: false }), face, null, IMAGE_W, IMAGE_H);
+    const mirrored = planCategoryRenders("earrings", makeAssetGeometry({ mirrorable: true }), face, null, IMAGE_W, IMAGE_H);
+    expect(unmirrored[1].transform!.mirrored).toBe(false);
+    expect(mirrored[1].transform!.mirrored).toBe(true);
+    // Left is never mirrored either way.
+    expect(unmirrored[0].transform!.mirrored).toBe(false);
+    expect(mirrored[0].transform!.mirrored).toBe(false);
+  });
+
+  it("returns a null transform for a slot whose placement failed, without failing the whole plan", () => {
+    const plans = planCategoryRenders("earrings", makeAssetGeometry(), null, null, IMAGE_W, IMAGE_H);
+    expect(plans).toHaveLength(2);
+    expect(plans[0].transform).toBeNull();
+    expect(plans[1].transform).toBeNull();
   });
 });

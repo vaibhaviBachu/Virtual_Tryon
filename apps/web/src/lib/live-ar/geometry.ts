@@ -307,3 +307,54 @@ export function buildLiveTransform(
     mirrored,
   };
 }
+
+/** One renderable unit for a frame: a slot (e.g. "left"/"right" for a pair of
+ * earrings, or "necklace" for the single necklace anchor) plus the transform to draw
+ * there, or null if that slot's placement could not be computed this frame. */
+export interface CategoryRenderPlan {
+  slot: "left" | "right" | "necklace";
+  transform: import("@/lib/live-ar/types").LiveTransform | null;
+}
+
+/** Plans everything that needs to be drawn for the current category selection, in one
+ * call, so the render loop (the React hook that owns requestAnimationFrame) doesn't
+ * have to re-implement per-category branching itself. For "earrings", always plans
+ * BOTH slots (a real try-on shows both ears at once): the right slot is drawn mirrored
+ * from the same asset when `assetGeometry.mirrorable` is true (a symmetric
+ * single-design earring, spec §11), or with the identical (unmirrored) transform
+ * otherwise -- documented as a known limitation for a deliberately asymmetric
+ * left/right earring pair design, which this milestone's catalogue does not yet model
+ * as two distinct assets. */
+export function planCategoryRenders(
+  category: CategorySlug,
+  assetGeometry: JewelleryAssetGeometry,
+  face: LiveFaceLandmarks | null,
+  pose: LivePoseLandmarks | null,
+  imageWidthPx: number,
+  imageHeightPx: number,
+  necklaceLength: string | null = null
+): CategoryRenderPlan[] {
+  if (category === "necklace") {
+    const anchor = computeAnchor("necklace", null, null, pose, imageWidthPx, imageHeightPx, necklaceLength);
+    const scale = computeScale("necklace", assetGeometry, anchor);
+    const rotation = computeRotation("necklace", null, pose, imageWidthPx, imageHeightPx);
+    return [{ slot: "necklace", transform: buildLiveTransform(assetGeometry, anchor, scale, rotation, false) }];
+  }
+
+  // earrings
+  const leftAnchor = computeAnchor("earrings", "left", face, null, imageWidthPx, imageHeightPx);
+  const leftScale = computeScale("earrings", assetGeometry, leftAnchor);
+  const rotation = computeRotation("earrings", face, null, imageWidthPx, imageHeightPx);
+  const leftTransform = buildLiveTransform(assetGeometry, leftAnchor, leftScale, rotation, false);
+
+  const rightAnchor = computeAnchor("earrings", "right", face, null, imageWidthPx, imageHeightPx);
+  const rightScale = computeScale("earrings", assetGeometry, rightAnchor);
+  // A mirrored asset's right-ear placement flips the SAME source texture horizontally
+  // (see renderer.ts's drawJewelleryOverlay) rather than needing a second asset.
+  const rightTransform = buildLiveTransform(assetGeometry, rightAnchor, rightScale, rotation, assetGeometry.mirrorable);
+
+  return [
+    { slot: "left", transform: leftTransform },
+    { slot: "right", transform: rightTransform },
+  ];
+}
