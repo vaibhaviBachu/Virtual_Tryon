@@ -279,3 +279,31 @@ export function computeRotation(category: CategorySlug, face: LiveFaceLandmarks 
   if (category === "necklace") return computeNecklaceRotation(pose, imageWidthPx, imageHeightPx);
   return { success: false, rotationDegrees: 0, rawDegrees: null, clamped: false, method: "unsupported_category" };
 }
+
+/** Combines an anchor/scale/rotation result plus the loaded asset's own geometry into
+ * the single lightweight LiveTransform the renderer applies to the cached texture. This
+ * is the browser-side equivalent of ai/geometry/transform.py's `compute_transform` --
+ * same anchor-coincidence composition (BODY_ANCHOR = target, JEWELLERY_ANCHOR = source),
+ * but returns the transform PARAMETERS (translate/rotate/scale) rather than a baked 2x3
+ * matrix, since Canvas 2D's own `translate`/`rotate`/`scale` calls compose the same
+ * result without this module needing to hand-multiply matrices (see renderer.ts).
+ * Returns null if any input failed -- callers should treat that the same as a lost/
+ * degraded tracking frame (see tracking-state.ts), never render a partial transform. */
+export function buildLiveTransform(
+  assetGeometry: JewelleryAssetGeometry,
+  anchor: AnchorResult,
+  scale: ScaleResult,
+  rotation: RotationResult,
+  mirrored: boolean
+): import("@/lib/live-ar/types").LiveTransform | null {
+  if (!anchor.success || anchor.anchorPx === null) return null;
+  if (!scale.success) return null;
+  if (!rotation.success) return null;
+  return {
+    anchorPx: anchor.anchorPx,
+    scaleFactor: scale.scaleFactor,
+    rotationDegrees: rotation.rotationDegrees,
+    sourceAnchorPx: assetGeometry.anchorPx,
+    mirrored,
+  };
+}

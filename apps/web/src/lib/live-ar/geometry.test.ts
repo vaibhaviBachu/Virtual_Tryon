@@ -7,6 +7,7 @@ import {
   NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
 } from "@/lib/live-ar/constants";
 import {
+  buildLiveTransform,
   computeAnchor,
   computeEarringRotation,
   computeNecklaceRotation,
@@ -255,5 +256,41 @@ describe("computeScale (mirrors ai/tests/test_geometry_scale.py)", () => {
     const result = computeScale("necklace", geometry, anchor);
     expect(result.success).toBe(false);
     expect(result.method).toBe("asset_has_no_measurable_width");
+  });
+});
+
+describe("buildLiveTransform", () => {
+  it("combines a successful anchor/scale/rotation into a renderable transform", () => {
+    const pose = poseWithShoulders(0, 1, 0.5);
+    const anchor = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H);
+    const geometry = makeAssetGeometry();
+    const scale = computeScale("necklace", geometry, anchor);
+    const rotation = computeNecklaceRotation(pose, IMAGE_W, IMAGE_H);
+
+    const transform = buildLiveTransform(geometry, anchor, scale, rotation, false);
+    expect(transform).not.toBeNull();
+    expect(transform!.anchorPx).toEqual(anchor.anchorPx);
+    expect(transform!.scaleFactor).toBe(scale.scaleFactor);
+    expect(transform!.rotationDegrees).toBe(rotation.rotationDegrees);
+    expect(transform!.sourceAnchorPx).toEqual(geometry.anchorPx);
+    expect(transform!.mirrored).toBe(false);
+  });
+
+  it("returns null when the anchor failed", () => {
+    const anchor = computeAnchor("necklace", null, null, null, IMAGE_W, IMAGE_H);
+    const geometry = makeAssetGeometry();
+    const scale = computeScale("necklace", geometry, anchor);
+    const rotation = computeNecklaceRotation(null, IMAGE_W, IMAGE_H);
+    expect(buildLiveTransform(geometry, anchor, scale, rotation, false)).toBeNull();
+  });
+
+  it("returns null when scale failed even if anchor succeeded", () => {
+    const pose = poseWithShoulders(0, 1, 0.5);
+    const anchor = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H);
+    const geometry = makeAssetGeometry({ alphaBbox: [10, 10, 10, 10] });
+    const scale = computeScale("necklace", geometry, anchor);
+    const rotation = computeNecklaceRotation(pose, IMAGE_W, IMAGE_H);
+    expect(scale.success).toBe(false);
+    expect(buildLiveTransform(geometry, anchor, scale, rotation, false)).toBeNull();
   });
 });
