@@ -21,6 +21,10 @@ const BASE_ASSET: AssetResponse = {
   file_size_bytes: null,
   processing_status: "pending",
   processing_error: null,
+  anchor_x: null,
+  anchor_y: null,
+  attachment_point: null,
+  mirrorable: false,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
