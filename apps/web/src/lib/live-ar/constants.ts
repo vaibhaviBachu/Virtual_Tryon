@@ -56,11 +56,17 @@ export const NECKLACE_LENGTH_OFFSET_MULTIPLIER: Record<string, number> = {
 // standalone invented offsets. ---
 
 // How far down the (chin-proxy -> shoulder-midpoint) span the necklace's attachment
-// point sits: 0 = right at the chin, 1 = right at the shoulder line. 0.85 places it
-// close to the shoulders/collarbone -- where a necklace naturally rests -- while
-// staying just inside the measured neck itself rather than merging into the shoulder
-// line. First-pass calibration (2026-09-18): verify and tune against a live camera.
-export const NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH = 0.85;
+// point sits: 0 = right at the chin, 1 = right at the shoulder line.
+// Recalibrated from 0.85 -> 0.65 after real-device Live AR verification (2026-09-18):
+// with the asset-level anchor bug fixed (this asset's stored anchor_x/anchor_y
+// override, unrelated to this constant, was dragging the whole necklace image up --
+// see the commit removing it), 0.85 placed the attachment right at the collarbone/
+// chest line, which read as "too low" on camera once the asset itself was anchored
+// correctly. 0.65 moves the attachment two-thirds of the way down the measured
+// chin-to-shoulder span instead of nearly all the way -- still a proportion of the
+// real per-frame measurement, not a fixed pixel offset. Verify again against a live
+// camera; tune further only against this same measured span, never a raw constant.
+export const NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH = 0.65;
 
 // Diagnostic-only estimate of visible neck width, as a fraction of the measured face
 // bounding-box width. Anthropometric surveys put adult neck width at roughly 75-85% of
