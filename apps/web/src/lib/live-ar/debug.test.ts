@@ -81,6 +81,29 @@ describe("computeNecklaceDebugSnapshot", () => {
     expect(snapshot!.finalVisibleBboxPx[3]).toBeCloseTo(1160, 6); // bottom
   });
 
+  it("SELF-CHECK: transformedAssetAttachmentPx always exactly equals finalAttachmentPx (mathematically guaranteed -- the asset's own attachment point IS transform.sourceAnchorPx by construction, so transforming it must land exactly on transform.anchorPx). If a real snapshot ever shows these two values differing, that is proof of a live bug (stale closure, mismatched transform object, etc), not a calibration issue.", () => {
+    const transform: LiveTransform = {
+      anchorPx: { x: 576.4, y: 536.4 },
+      scaleFactor: 0.2089,
+      rotationDegrees: -1.11,
+      sourceAnchorPx: { x: 627.0, y: 0.0 },
+      mirrored: false,
+    };
+    const geometry: JewelleryAssetGeometry = {
+      widthPx: 1254,
+      heightPx: 1254,
+      alphaBbox: [51.0, 0.0, 1202.0, 1176.0],
+      anchorPx: { x: 627.0, y: 0.0 },
+      anchorSource: "default_bbox_top_center",
+      mirrorable: false,
+      physicalWidthMm: null,
+    };
+    const snapshot = computeNecklaceDebugSnapshot(face(), pose(), IMAGE_W, IMAGE_H, geometry, transform);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.transformedAssetAttachmentPx.x).toBeCloseTo(snapshot!.finalAttachmentPx.x, 6);
+    expect(snapshot!.transformedAssetAttachmentPx.y).toBeCloseTo(snapshot!.finalAttachmentPx.y, 6);
+  });
+
   it("falls back gracefully (still returns a snapshot) when there is no face this frame", () => {
     const transform: LiveTransform = {
       anchorPx: { x: 500, y: 500 },
@@ -110,6 +133,7 @@ describe("formatNecklaceDebugSnapshot", () => {
     expect(text).toContain("NECK:");
     expect(text).toContain("JEWELLERY ATTACHMENT");
     expect(text).toContain("FINAL ATTACHMENT");
+    expect(text).toContain("TRANSFORMED JEWELLERY ATTACHMENT");
     expect(text).not.toContain("[object Object]");
   });
 });

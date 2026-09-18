@@ -47,6 +47,16 @@ export interface NecklaceDebugSnapshot {
   scaleFactor: number;
   rotationDegrees: number;
   finalAttachmentPx: PixelPoint;
+  /** The asset's OWN attachment point (assetAttachmentPx), mapped through the exact
+   * same transform as everything else in this snapshot. By construction this MUST
+   * equal `finalAttachmentPx` (assetAttachmentPx literally IS transform.sourceAnchorPx,
+   * so transforming it is mathematically guaranteed to land exactly on
+   * transform.anchorPx). This field exists purely as a self-check: if it and
+   * `finalAttachmentPx` ever print DIFFERENT values, that is proof of a real bug (stale
+   * closure, mismatched transform object, etc), not a calibration issue -- if they
+   * match but the on-screen result still looks wrong, the bug is elsewhere (a stale
+   * build, or the visual interpretation of where the asset's attachment SHOULD be). */
+  transformedAssetAttachmentPx: PixelPoint;
   finalVisibleBboxPx: [number, number, number, number]; // left, top, right, bottom in canvas space
 }
 
@@ -95,6 +105,10 @@ export function formatNecklaceDebugSnapshot(s: NecklaceDebugSnapshot): string {
     ``,
     `TRANSFORM: scale=${s.scaleFactor.toFixed(4)}  rotation=${s.rotationDegrees.toFixed(2)}deg`,
     `FINAL ATTACHMENT (canvas space): ${fmtPt(s.finalAttachmentPx)}`,
+    `TRANSFORMED JEWELLERY ATTACHMENT (self-check, must equal FINAL ATTACHMENT exactly): ${fmtPt(s.transformedAssetAttachmentPx)}  diff=${Math.hypot(
+      s.transformedAssetAttachmentPx.x - s.finalAttachmentPx.x,
+      s.transformedAssetAttachmentPx.y - s.finalAttachmentPx.y
+    ).toFixed(3)}px`,
     `FINAL VISIBLE BBOX (canvas space): [${s.finalVisibleBboxPx.map((n) => n.toFixed(1)).join(", ")}]`,
   ].join("\n");
 }
@@ -131,6 +145,7 @@ export function computeNecklaceDebugSnapshot(
   const neck = computeNeckReferenceFrame(face, pose, imageWidthPx, imageHeightPx);
 
   const assetAttachmentPx = assetGeometry.anchorPx;
+  const transformedAssetAttachmentPx = transformAssetPoint(transform, assetGeometry.anchorPx);
   const [l, t, r, b] = assetGeometry.alphaBbox;
   const corners = [
     { x: l, y: t },
@@ -166,6 +181,7 @@ export function computeNecklaceDebugSnapshot(
     scaleFactor: transform.scaleFactor,
     rotationDegrees: transform.rotationDegrees,
     finalAttachmentPx: transform.anchorPx,
+    transformedAssetAttachmentPx,
     finalVisibleBboxPx,
   };
 }
