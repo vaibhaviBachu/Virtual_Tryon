@@ -181,3 +181,79 @@ def test_upload_requires_admin(customer_client, jewellery_item):
         files={"file": ("photo.jpg", image_bytes, "image/jpeg")},
     )
     assert response.status_code == 403
+
+
+def test_public_asset_endpoints_expose_geometry_anchor_metadata(
+    customer_client, db_session, jewellery_item
+):
+    """Milestone 5 Live AR (docs/live-ar-architecture.md): the browser renders with no
+    server-side render step in the loop, so it needs the SAME anchor_x/anchor_y/
+    attachment_point/mirrorable calibration ai/geometry/asset_geometry.py already reads
+    off this row -- via the PUBLIC (no-auth) asset endpoints, since a customer trying on
+    jewellery is never an admin. This is a pure response-schema exposure of existing
+    Milestone 4 columns; the columns themselves were already there before this test."""
+    asset = JewelleryAsset(
+        jewellery_id=jewellery_item.id,
+        asset_type="processed",
+        storage_key=f"jewellery/{jewellery_item.id}/processed/live-ar-test.png",
+        mime_type="image/png",
+        width_px=300,
+        height_px=300,
+        processing_status="ready",
+        anchor_x=0.5,
+        anchor_y=0.78,
+        attachment_point="chain_center",
+        mirrorable=True,
+    )
+    db_session.add(asset)
+    db_session.commit()
+    db_session.refresh(asset)
+
+    list_response = customer_client.get(f"/api/v1/catalog/jewellery/{jewellery_item.id}/assets")
+    assert list_response.status_code == 200
+    [body] = [a for a in list_response.json() if a["id"] == str(asset.id)]
+    assert body["anchor_x"] == pytest.approx(0.5)
+    assert body["anchor_y"] == pytest.approx(0.78)
+    assert body["attachment_point"] == "chain_center"
+    assert body["mirrorable"] is True
+
+    get_response = customer_client.get(f"/api/v1/catalog/assets/{asset.id}")
+    assert get_response.status_code == 200
+    single = get_response.json()
+    assert single["anchor_x"] == pytest.approx(0.5)
+    assert single["anchor_y"] == pytest.approx(0.78)
+    assert single["mirrorable"] is True
+
+    db_session.delete(db_session.get(JewelleryAsset, asset.id))
+    db_session.commit()
+
+
+def test_public_asset_endpoint_defaults_anchor_fields_to_null_and_mirrorable_to_false(
+    customer_client, db_session, jewellery_item
+):
+    """No admin-supplied anchor is the common case (ai/geometry/asset_geometry.py's own
+    default-bbox-top-center fallback exists for exactly this) -- confirm the API surface
+    reflects that honestly as null/false rather than a fabricated default anchor."""
+    asset = JewelleryAsset(
+        jewellery_id=jewellery_item.id,
+        asset_type="processed",
+        storage_key=f"jewellery/{jewellery_item.id}/processed/live-ar-test-default.png",
+        mime_type="image/png",
+        width_px=300,
+        height_px=300,
+        processing_status="ready",
+    )
+    db_session.add(asset)
+    db_session.commit()
+    db_session.refresh(asset)
+
+    response = customer_client.get(f"/api/v1/catalog/assets/{asset.id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["anchor_x"] is None
+    assert body["anchor_y"] is None
+    assert body["attachment_point"] is None
+    assert body["mirrorable"] is False
+
+    db_session.delete(db_session.get(JewelleryAsset, asset.id))
+    db_session.commit()
