@@ -1,0 +1,281 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import type { AssetWithPreviewResponse } from "@/lib/catalogue-types";
+import { loadJewelleryAssetTexture } from "@/lib/live-ar/asset-cache";
+import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar/camera";
+import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
+import { planCategoryRenders } from "@/lib/live-ar/geometry";
+import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
+import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
+import { drawJewelleryOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
+import { TransformSmoother } from "@/lib/live-ar/smoothing";
+import { createLiveTrackers, detectFrame, type LiveTrackers } from "@/lib/live-ar/tracking";
+import { TrackingStateMachine } from "@/lib/live-ar/tracking-state";
+import type { CategorySlug, JewelleryAssetGeometry, LiveTransform, TrackingStatus } from "@/lib/live-ar/types";
+
+export type CameraStatus = "idle" | "starting" | "ready" | "error";
+export type TrackersStatus = "idle" | "loading" | "ready" | "error";
+
+interface SlotState {
+  trackingMachine: TrackingStateMachine<LiveTransform>;
+  smoother: TransformSmoother;
+}
+
+function makeSlotState(): SlotState {
+  return { trackingMachine: new TrackingStateMachine<LiveTransform>(), smoother: new TransformSmoother() };
+}
+
+/** Smooths only the numeric fields of a LiveTransform, preserving `mirrored` and
+ * `sourceAnchorPx` unchanged -- those are asset-space constants for the current
+ * texture, not tracked quantities, so smoothing them would be meaningless. */
+function smoothTransform(smoother: TransformSmoother, transform: LiveTransform, dtMs: number): LiveTransform {
+  const smoothed = smoother.update(
+    { anchorXPx: transform.anchorPx.x, anchorYPx: transform.anchorPx.y, scale: transform.scaleFactor, rotationDegrees: transform.rotationDegrees },
+    dtMs
+  );
+  return {
+    anchorPx: { x: smoothed.anchorXPx, y: smoothed.anchorYPx },
+    scaleFactor: smoothed.scale,
+    rotationDegrees: smoothed.rotationDegrees,
+    sourceAnchorPx: transform.sourceAnchorPx,
+    mirrored: transform.mirrored,
+  };
+}
+
+export interface UseLiveArSessionArgs {
+  category: CategorySlug;
+  jewelleryId: string | null;
+  asset: AssetWithPreviewResponse | null;
+  necklaceLength?: string | null;
+}
+
+export interface UseLiveArSessionResult {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  mirrorTransform: string;
+  cameraStatus: CameraStatus;
+  cameraError: CameraError | null;
+  trackersStatus: TrackersStatus;
+  trackersError: string | null;
+  assetLoading: boolean;
+  assetError: string | null;
+  trackingStatus: TrackingStatus;
+  readiness: ReadinessResult<string> | null;
+  performance: PerformanceSnapshot;
+  /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
+   * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
+   * canvas isn't ready yet. */
+  captureFrame: () => Promise<Blob | null>;
+}
+
+const DROPPED_FRAME_THRESHOLD_MS = 1000 / 20; // spec's 24fps-min target with headroom
+
+export function useLiveArSession({ category, jewelleryId, asset, necklaceLength = null }: UseLiveArSessionArgs): UseLiveArSessionResult {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const trackersRef = useRef<LiveTrackers | null>(null);
+  const assetGeometryRef = useRef<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null>(null);
+  const slotsRef = useRef<Map<string, SlotState>>(new Map());
+  const performanceTrackerRef = useRef(new PerformanceTracker());
+  const rafRef = useRef<number | null>(null);
+  const lastFrameAtMsRef = useRef<number | null>(null);
+
+  const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
+  const [cameraError, setCameraError] = useState<CameraError | null>(null);
+  const [trackersStatus, setTrackersStatus] = useState<TrackersStatus>("idle");
+  const [trackersError, setTrackersError] = useState<string | null>(null);
+  const [assetLoading, setAssetLoading] = useState(false);
+  const [assetError, setAssetError] = useState<string | null>(null);
+  const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>("TRACKING_LOST");
+  const [readiness, setReadiness] = useState<ReadinessResult<string> | null>(null);
+  const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot>(performanceTrackerRef.current.snapshot());
+
+  // Start the camera once per mount.
+  useEffect(() => {
+    let cancelled = false;
+    setCameraStatus("starting");
+    startLiveCamera().then((result) => {
+      if (cancelled) {
+        if (result.success) stopLiveCamera(result.stream);
+        return;
+      }
+      if (!result.success) {
+        setCameraError(result.error);
+        setCameraStatus("error");
+        return;
+      }
+      streamRef.current = result.stream;
+      if (videoRef.current) videoRef.current.srcObject = result.stream;
+      setCameraStatus("ready");
+    });
+    return () => {
+      cancelled = true;
+      stopLiveCamera(streamRef.current);
+      streamRef.current = null;
+    };
+  }, []);
+
+  // Load MediaPipe trackers once per mount (see tracking.ts's docstring on why this
+  // cannot be verified inside this project's own sandboxed CI environment).
+  useEffect(() => {
+    let cancelled = false;
+    setTrackersStatus("loading");
+    createLiveTrackers()
+      .then((trackers) => {
+        if (cancelled) {
+          trackers.close();
+          return;
+        }
+        trackersRef.current = trackers;
+        setTrackersStatus("ready");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setTrackersError(err instanceof Error ? err.message : "Live tracking could not be started.");
+        setTrackersStatus("error");
+      });
+    return () => {
+      cancelled = true;
+      trackersRef.current?.close();
+      trackersRef.current = null;
+    };
+  }, []);
+
+  // Load (or reuse cached) the selected jewellery texture whenever the selection
+  // changes -- never per frame (spec §11/§18).
+  useEffect(() => {
+    if (!asset || !asset.preview_url) {
+      assetGeometryRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    setAssetLoading(true);
+    setAssetError(null);
+    loadJewelleryAssetTexture(asset, asset.preview_url)
+      .then((loaded) => {
+        if (cancelled) return;
+        assetGeometryRef.current = loaded;
+        setAssetLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        assetGeometryRef.current = null;
+        setAssetError(err instanceof Error ? err.message : "Could not load this jewellery item.");
+        setAssetLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asset]);
+
+  // Category changes reset per-slot tracking/smoothing state -- a left-earring's held
+  // transform must never leak into a necklace's slot after switching categories.
+  useEffect(() => {
+    slotsRef.current = new Map();
+  }, [category]);
+
+  // The render loop.
+  useEffect(() => {
+    function loop(nowMs: number) {
+      rafRef.current = requestAnimationFrame(loop);
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const trackers = trackersRef.current;
+      if (!video || !canvas || !trackers || video.readyState < 2) return;
+
+      const frameStartMs = performance.now();
+      const previousFrameAtMs = lastFrameAtMsRef.current;
+      lastFrameAtMsRef.current = frameStartMs;
+      const dtMs = previousFrameAtMs === null ? 16.7 : frameStartMs - previousFrameAtMs;
+
+      const videoWidthPx = video.videoWidth;
+      const videoHeightPx = video.videoHeight;
+      if (videoWidthPx === 0 || videoHeightPx === 0) return;
+      ensureCanvasSize(canvas, videoWidthPx, videoHeightPx);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      const t0 = performance.now();
+      const { face, pose } = detectFrame(trackers, video, nowMs);
+      const t1 = performance.now();
+
+      const loaded = assetGeometryRef.current;
+      let overlays: { image: HTMLImageElement; transform: LiveTransform; opacity: number }[] = [];
+      let primaryStatus: TrackingStatus = "TRACKING_LOST";
+
+      if (loaded) {
+        const plans = planCategoryRenders(category, loaded.geometry, face, pose, videoWidthPx, videoHeightPx, necklaceLength);
+        overlays = plans.flatMap((plan, index) => {
+          let slot = slotsRef.current.get(plan.slot);
+          if (!slot) {
+            slot = makeSlotState();
+            slotsRef.current.set(plan.slot, slot);
+          }
+          const smoothed = plan.transform ? smoothTransform(slot.smoother, plan.transform, dtMs) : null;
+          const result = slot.trackingMachine.update(frameStartMs, smoothed);
+          if (index === 0) primaryStatus = result.status;
+          if (result.transform === null || result.opacity <= 0) return [];
+          return [{ image: loaded.image, transform: result.transform, opacity: result.opacity }];
+        });
+      }
+      const t2 = performance.now();
+
+      renderLiveFrame(ctx, { video, videoWidthPx, videoHeightPx }, null);
+      for (const overlay of overlays) {
+        drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity);
+      }
+      const t3 = performance.now();
+
+      const totalFrameMs = previousFrameAtMs === null ? t3 - t0 : frameStartMs - previousFrameAtMs;
+      performanceTrackerRef.current.record({
+        totalFrameMs,
+        trackingMs: t1 - t0,
+        geometryMs: t2 - t1,
+        renderMs: t3 - t2,
+        droppedFrame: totalFrameMs > DROPPED_FRAME_THRESHOLD_MS,
+      });
+
+      setTrackingStatus(primaryStatus);
+      setPerformanceSnapshot(performanceTrackerRef.current.snapshot());
+      setReadiness(
+        category === "necklace"
+          ? evaluateNecklaceReadiness(pose, videoWidthPx, videoHeightPx)
+          : evaluateEarringsReadiness("left", face, videoWidthPx, videoHeightPx)
+      );
+    }
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, [category, necklaceLength, jewelleryId]);
+
+  const captureFrame = useCallback((): Promise<Blob | null> => {
+    const canvas = canvasRef.current;
+    if (!canvas) return Promise.resolve(null);
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.92));
+  }, []);
+
+  return {
+    videoRef,
+    canvasRef,
+    // Live AR mirrors the preview for a natural "looking in a mirror" UX -- see
+    // coordinates.ts's module docstring for why this is safe (mirroring the shared
+    // wrapper only, never individual tracking/render coordinates).
+    mirrorTransform: containerMirrorTransform(true),
+    cameraStatus,
+    cameraError,
+    trackersStatus,
+    trackersError,
+    assetLoading,
+    assetError,
+    trackingStatus,
+    readiness,
+    performance: performanceSnapshot,
+    captureFrame,
+  };
+}
