@@ -3,6 +3,7 @@ metadata, like create_all in tests) sees all of them from a single import."""
 from db.models.category import JewelleryCategory
 from db.models.jewellery import Jewellery
 from db.models.jewellery_asset import AssetType, JewelleryAsset, ProcessingStatus
+from db.models.live_ar import LiveArCapture
 from db.models.tryon import (
     TryOnRender,
     TryOnRenderStatus,
@@ -25,6 +26,7 @@ __all__ = [
     "TryOnRequestStatus",
     "TryOnRender",
     "TryOnRenderStatus",
+    "LiveArCapture",
     "User",
     "UserRole",
 ]

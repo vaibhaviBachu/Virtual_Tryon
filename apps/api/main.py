@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apps.api.core.config import get_settings
 from apps.api.core.logging import configure_logging
 from apps.api.core.middleware import RequestIDMiddleware, register_exception_handlers
-from apps.api.v1.routers import auth, catalog, health, tryon
+from apps.api.v1.routers import auth, catalog, health, live_ar, tryon
 
 settings = get_settings()
 configure_logging(settings.LOG_LEVEL)
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(tryon.router)
     # Milestone 4+: jewellery placement/rendering endpoints (not this router — this one
     # is user-image understanding only, per Milestone 3's explicit scope boundary).
+    app.include_router(live_ar.router)
 
     return app
 

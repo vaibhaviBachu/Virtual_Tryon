@@ -73,6 +73,17 @@ def tryon_render_result_key(session_id: uuid.UUID, request_id: uuid.UUID) -> str
     return f"tryon/{session_id}/{request_id}/result/{uuid.uuid4()}.png"
 
 
+def live_ar_capture_key(session_id: uuid.UUID, mime_type: str) -> str:
+    """Milestone 5: one composited Live AR capture per key, under its own top-level
+    prefix (never `jewellery/`, and deliberately not nested under `tryon/` either,
+    since a Live AR capture did not go through a tryon_request/tryon_render — see the
+    20260918_0005 migration's docstring). Private; always served via a short-lived
+    signed URL, same as every other user photo in this codebase."""
+    ext = sanitize_extension(extension_for_mime_type(mime_type))
+    filename = f"{uuid.uuid4()}.{ext}"
+    return f"live-ar/{session_id}/{filename}"
+
+
 def tryon_render_debug_key(session_id: uuid.UUID, request_id: uuid.UUID) -> str:
     """Internal/developer-only debug visualization (spec §27) — same private prefix
     family as the result image, kept in its own `debug/` sub-path so it can never be
