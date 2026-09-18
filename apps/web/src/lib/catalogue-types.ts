@@ -51,6 +51,13 @@ export interface AssetResponse {
   file_size_bytes: number | null;
   processing_status: ProcessingStatus;
   processing_error: string | null;
+  // Milestone 4 geometry-try-on anchor metadata, exposed for Milestone 5 Live AR (the
+  // browser-side renderer needs this same calibration data ai/geometry/asset_geometry.py
+  // reads server-side — see apps/api/v1/schemas/asset.py and docs/live-ar-architecture.md).
+  anchor_x: number | null;
+  anchor_y: number | null;
+  attachment_point: string | null;
+  mirrorable: boolean;
   created_at: string;
   updated_at: string;
 }
