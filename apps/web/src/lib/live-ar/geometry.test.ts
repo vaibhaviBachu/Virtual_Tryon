@@ -4,7 +4,7 @@ import {
   EAR_ANCHOR_VERTICAL_OFFSET_FRACTION,
   MAX_EARRING_ROTATION_DEGREES,
   MAX_NECKLACE_ROTATION_DEGREES,
-  NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
+  NECKLACE_NECK_ANCHOR_FRACTION,
 } from "@/lib/live-ar/constants";
 import {
   buildLiveTransform,
@@ -76,24 +76,39 @@ describe("computeAnchor — earrings (mirrors ai/tests/test_geometry_anchors.py)
   });
 });
 
-function poseWithShoulders(leftX = 0.35, rightX = 0.65, y = 0.4): LivePoseLandmarks {
+function poseWithShoulders(leftX = 0.35, rightX = 0.65, y = 0.4, mouthY = 0.1): LivePoseLandmarks {
   const landmarks: NormalizedPoint[] = Array.from({ length: 13 }, () => ({ x: 0.5, y: 0.1, visibility: 0.9 }));
+  landmarks[9] = { x: 0.48, y: mouthY, visibility: 0.9 }; // mouth left corner
+  landmarks[10] = { x: 0.52, y: mouthY, visibility: 0.9 }; // mouth right corner
   landmarks[11] = { x: leftX, y, visibility: 0.9 };
   landmarks[12] = { x: rightX, y, visibility: 0.9 };
   return { landmarks, confidence: 0.9 };
 }
 
-describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py)", () => {
-  it("applies the documented vertical offset toward the collarbone", () => {
+describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py, plus the Live-AR-only neck-interpolation refinement)", () => {
+  it("interpolates between the mouth landmarks and the shoulder midpoint toward the collarbone", () => {
     const pose = poseWithShoulders();
     const result = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H);
     expect(result.success).toBe(true);
     const shoulderWidthPx = (0.65 - 0.35) * IMAGE_W;
-    const expectedX = 0.5 * IMAGE_W;
-    const expectedY = 0.4 * IMAGE_H + NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * shoulderWidthPx;
+    const mouthMidYPx = 0.1 * IMAGE_H;
+    const shoulderYPx = 0.4 * IMAGE_H;
+    const expectedX = 0.5 * IMAGE_W; // mouth and shoulder midpoints are both centered
+    const expectedY = mouthMidYPx + NECKLACE_NECK_ANCHOR_FRACTION * (shoulderYPx - mouthMidYPx);
     expect(result.anchorPx!.x).toBeCloseTo(expectedX, 6);
     expect(result.anchorPx!.y).toBeCloseTo(expectedY, 6);
     expect(result.referenceMeasurementPx).toBeCloseTo(shoulderWidthPx, 6);
+    expect(result.method).toBe("pose_mouth_to_shoulder_neck_interpolation");
+  });
+
+  it("adapts to a longer visible neck (mouth further from shoulders) without changing shoulder width", () => {
+    const shortNeck = computeAnchor("necklace", null, null, poseWithShoulders(0.35, 0.65, 0.4, 0.1), IMAGE_W, IMAGE_H);
+    const longNeck = computeAnchor("necklace", null, null, poseWithShoulders(0.35, 0.65, 0.4, 0.02), IMAGE_W, IMAGE_H);
+    // A mouth landmark further above the shoulders (smaller y) pulls the interpolated
+    // anchor's y up too, even though shoulder width -- and thus the OLD fixed-offset
+    // formula's result -- would have been identical in both cases.
+    expect(longNeck.anchorPx!.y).toBeLessThan(shortNeck.anchorPx!.y);
+    expect(longNeck.referenceMeasurementPx).toBeCloseTo(shortNeck.referenceMeasurementPx!, 6);
   });
 
   it("fails with a structured code when there is no pose", () => {

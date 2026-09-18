@@ -40,6 +40,7 @@ import {
   MIN_SCALE_FACTOR,
   NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
   NECKLACE_LENGTH_OFFSET_MULTIPLIER,
+  NECKLACE_NECK_ANCHOR_FRACTION,
   NECKLACE_RELATIVE_SCALE_OF_SHOULDER_WIDTH,
 } from "@/lib/live-ar/constants";
 import type {
@@ -59,6 +60,11 @@ const LEFT_EDGE_IDX = 234;
 const RIGHT_EDGE_IDX = 454;
 const LEFT_SHOULDER_IDX = 11;
 const RIGHT_SHOULDER_IDX = 12;
+// MediaPipe Pose's mouth-corner landmarks (roughly chin/jaw height) -- used only to
+// locate the actual visible neck for the Live AR necklace anchor, see
+// computeNeckBaseAnchorPx's docstring below for why.
+const MOUTH_LEFT_IDX = 9;
+const MOUTH_RIGHT_IDX = 10;
 const EAR_HEURISTIC_CONFIDENCE_CEILING = 0.85;
 
 // --- Ear resolution (ports ai/landmarks/face.py's _estimate_ears_and_yaw, screen-
@@ -140,6 +146,38 @@ function computeEarAnchor(
   };
 }
 
+/**
+ * Live-AR-only refinement (no Python mirror -- see this module's file docstring on
+ * deliberate, documented divergences from the photo pipeline): rather than nudging the
+ * anchor down from the shoulder midpoint by a FIXED fraction of shoulder WIDTH (which
+ * has no idea how much of the person's actual neck is visible -- framing, camera
+ * distance, head tilt all change that independently of shoulder width), this
+ * interpolates between the pose model's own mouth-corner landmarks (9/10, roughly
+ * chin/jaw height -- the top of the visible neck) and the measured shoulder midpoint
+ * (the bottom of the visible neck), then places the anchor most of the way down that
+ * PERSON-SPECIFIC, THIS-FRAME-SPECIFIC line -- i.e. at the base of the neck/collarbone,
+ * using the subject's own measured neck length instead of an anthropometric proxy.
+ * Returns null (never guesses) if the pose result doesn't include the mouth landmarks.
+ */
+function computeNeckBaseAnchorPx(
+  pose: LivePoseLandmarks,
+  shoulderMidpointPx: PixelPoint,
+  imageWidthPx: number,
+  imageHeightPx: number
+): PixelPoint | null {
+  if (pose.landmarks.length <= MOUTH_RIGHT_IDX) return null;
+  const mouthLeft = pose.landmarks[MOUTH_LEFT_IDX];
+  const mouthRight = pose.landmarks[MOUTH_RIGHT_IDX];
+  const mouthMidPx: PixelPoint = {
+    x: ((mouthLeft.x + mouthRight.x) / 2) * imageWidthPx,
+    y: ((mouthLeft.y + mouthRight.y) / 2) * imageHeightPx,
+  };
+  return {
+    x: mouthMidPx.x + NECKLACE_NECK_ANCHOR_FRACTION * (shoulderMidpointPx.x - mouthMidPx.x),
+    y: mouthMidPx.y + NECKLACE_NECK_ANCHOR_FRACTION * (shoulderMidpointPx.y - mouthMidPx.y),
+  };
+}
+
 function computeNecklaceAnchor(
   pose: LivePoseLandmarks | null,
   imageWidthPx: number,
@@ -152,16 +190,33 @@ function computeNecklaceAnchor(
   }
   const lengthMultiplier = necklaceLength !== null ? (NECKLACE_LENGTH_OFFSET_MULTIPLIER[necklaceLength] ?? 1.0) : 1.0;
   const [dx, dy] = frame.verticalBodyDirection;
-  const offsetPx = NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * lengthMultiplier * frame.shoulderWidthPx;
-  const anchorPx: PixelPoint = {
-    x: frame.shoulderMidpointPx.x + dx * offsetPx,
-    y: frame.shoulderMidpointPx.y + dy * offsetPx,
-  };
+
+  const neckBasePx = pose ? computeNeckBaseAnchorPx(pose, frame.shoulderMidpointPx, imageWidthPx, imageHeightPx) : null;
+  let anchorPx: PixelPoint;
+  let method: string;
+  if (neckBasePx !== null) {
+    // A "short"/"long" necklace length still nudges further along the body's vertical
+    // axis, but now as an adjustment ON TOP OF the measured neck-base point rather than
+    // the whole offset -- the neck-base point itself already accounts for framing.
+    const lengthAdjustmentPx = (lengthMultiplier - 1.0) * NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * frame.shoulderWidthPx;
+    anchorPx = { x: neckBasePx.x + dx * lengthAdjustmentPx, y: neckBasePx.y + dy * lengthAdjustmentPx };
+    method = "pose_mouth_to_shoulder_neck_interpolation";
+  } else {
+    // Fallback for a pose result with fewer than 11 landmarks (shouldn't normally
+    // happen once shoulders 11/12 are present, but never assume): same fixed
+    // shoulder-width-relative offset this anchor always used before.
+    const offsetPx = NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * lengthMultiplier * frame.shoulderWidthPx;
+    anchorPx = {
+      x: frame.shoulderMidpointPx.x + dx * offsetPx,
+      y: frame.shoulderMidpointPx.y + dy * offsetPx,
+    };
+    method = "pose_shoulder_midpoint_with_collarbone_offset";
+  }
   return {
     success: true,
     anchorPx,
     referenceMeasurementPx: frame.shoulderWidthPx,
-    method: "pose_shoulder_midpoint_with_collarbone_offset",
+    method,
   };
 }
 

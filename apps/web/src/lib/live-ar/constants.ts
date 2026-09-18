@@ -52,6 +52,16 @@ export const NECKLACE_LENGTH_OFFSET_MULTIPLIER: Record<string, number> = {
 // --- Live-AR-only constants (no Python equivalent — these govern the continuous
 // tracking loop itself, not any single frame's geometry) ---
 
+// How far down the (mouth-corner -> shoulder-midpoint) line the necklace anchor sits,
+// as a fraction of that line's own length: 0 = right at the mouth/chin, 1 = right at
+// the shoulder line. 0.85 places it close to the shoulders (the base of the neck /
+// collarbone, where a necklace naturally rests) while still tracking each frame's own
+// visible neck length rather than a fixed proportion of shoulder width. Tune this
+// directly against a live camera if the necklace still sits too high/low -- it has no
+// Python-pipeline equivalent to keep in sync (geometry.ts's computeNeckBaseAnchorPx
+// docstring explains why this is a deliberate Live-AR-only divergence).
+export const NECKLACE_NECK_ANCHOR_FRACTION = 0.85;
+
 // Readiness thresholds mirrored from ai/landmarks/readiness.py so live category
 // readiness (NECKLACE_READY/EARRINGS_READY) uses the identical bar the photo flow does.
 export const FACE_CONFIDENCE_THRESHOLD = 0.5;
