@@ -46,7 +46,14 @@ EAR_ANCHOR_VERTICAL_OFFSET_FRACTION = 0.16
 # down toward the collarbone/upper-chest region. Documented correction for a named
 # geometric mismatch between "shoulder midpoint" and "necklace resting point", not a
 # cosmetic tweak — see test_geometry_anchors.py::test_necklace_anchor_applies_documented_vertical_offset.
-NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION = 0.22
+#
+# Recalibrated from 0.22 -> 0.08 after real-device Live AR verification (2026-09-18):
+# the shoulder-landmark midpoint is already close to the base of the neck, so 0.22
+# (about a fifth of shoulder width) was placing the necklace's top anchor well down on
+# the chest instead of at the neck/collarbone. 0.08 keeps a small, documented nudge
+# toward the collarbone without dropping the piece that far. Mirrored in
+# apps/web/src/lib/live-ar/constants.ts -- keep both in sync.
+NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION = 0.08
 
 # --- Relative (physical-scale-unavailable) fallback scaling (spec §9, §14, §31) ---
 # When the catalogue item has no physical_width_mm, scale is derived as a fraction of a

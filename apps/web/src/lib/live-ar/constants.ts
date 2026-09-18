@@ -21,8 +21,13 @@ export const AVERAGE_ADULT_SHOULDER_WIDTH_MM = 380.0;
 
 // Mirrors EAR_ANCHOR_VERTICAL_OFFSET_FRACTION
 export const EAR_ANCHOR_VERTICAL_OFFSET_FRACTION = 0.16;
-// Mirrors NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION
-export const NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION = 0.22;
+// Mirrors NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION. Recalibrated from 0.22 -> 0.08 after
+// real-device Live AR verification (2026-09-18): the shoulder-landmark midpoint sits
+// almost at the base of the neck already, so 0.22 (roughly a fifth of shoulder width)
+// pushed the necklace's top anchor well down onto the chest instead of at the
+// neck/collarbone. 0.08 keeps the small documented nudge toward the collarbone without
+// dropping the piece past the neck. See ai/geometry/constants.py for the mirrored value.
+export const NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION = 0.08;
 
 // Mirrors EARRING_RELATIVE_SCALE_OF_FACE_WIDTH / NECKLACE_RELATIVE_SCALE_OF_SHOULDER_WIDTH
 export const EARRING_RELATIVE_SCALE_OF_FACE_WIDTH = 0.22;
