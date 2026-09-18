@@ -49,21 +49,28 @@ export const NECKLACE_LENGTH_OFFSET_MULTIPLIER: Record<string, number> = {
   long: 1.3, // UNCALIBRATED placeholder — see ai/geometry/constants.py
 };
 
+// --- Live-AR-only necklace neck-reference constants (no Python equivalent -- see
+// neck-reference.ts's file docstring for the full derivation). These replace a fixed
+// pixel/shoulder-width-only offset with an interpolation along a REAL, per-frame
+// measured chin-to-shoulder span, so they are proportions of a MEASUREMENT, not
+// standalone invented offsets. ---
+
+// How far down the (chin-proxy -> shoulder-midpoint) span the necklace's attachment
+// point sits: 0 = right at the chin, 1 = right at the shoulder line. 0.85 places it
+// close to the shoulders/collarbone -- where a necklace naturally rests -- while
+// staying just inside the measured neck itself rather than merging into the shoulder
+// line. First-pass calibration (2026-09-18): verify and tune against a live camera.
+export const NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH = 0.85;
+
+// Diagnostic-only estimate of visible neck width, as a fraction of the measured face
+// bounding-box width. Anthropometric surveys put adult neck width at roughly 75-85% of
+// bizygomatic face width; 0.8 is the documented midpoint. NOT currently used to drive
+// necklace scale (computeScale still calibrates off measured shoulder width -- see its
+// own docstring for why that remains the primary, already-adaptive reference).
+export const NECK_WIDTH_FRACTION_OF_FACE_WIDTH = 0.8;
+
 // --- Live-AR-only constants (no Python equivalent — these govern the continuous
 // tracking loop itself, not any single frame's geometry) ---
-
-// How far down the (mouth-corner -> shoulder-midpoint) line the necklace anchor sits,
-// as a fraction of that line's own length: 0 = right at the mouth, 1 = right at the
-// shoulder line. NOTE: the mouth-to-shoulder span covers the WHOLE lower face (chin,
-// jaw) plus the neck, not just the neck itself, so a fraction well past the midpoint is
-// needed to actually reach the collarbone -- 0.85 (first calibration) still landed on
-// the jaw in real-camera testing (2026-09-18), so this was raised to 1.05: slightly
-// PAST the shoulder line, since a necklace's chain rests at/just below the collarbone,
-// not level with the top of the shoulder itself. Tune this directly against a live
-// camera if it still sits too high/low -- it has no Python-pipeline equivalent to keep
-// in sync (geometry.ts's computeNeckBaseAnchorPx docstring explains why this is a
-// deliberate Live-AR-only divergence).
-export const NECKLACE_NECK_ANCHOR_FRACTION = 1.05;
 
 // Readiness thresholds mirrored from ai/landmarks/readiness.py so live category
 // readiness (NECKLACE_READY/EARRINGS_READY) uses the identical bar the photo flow does.

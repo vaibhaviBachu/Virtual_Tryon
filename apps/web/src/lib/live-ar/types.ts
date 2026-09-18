@@ -56,6 +56,33 @@ export interface BodyReferenceFrame {
   verticalBodyDirection: readonly [number, number];
 }
 
+/**
+ * The neck, as MediaPipe never gives it to us directly: derived from real, measured
+ * landmarks (face bounding box + shoulder positions), never a raw invented pixel
+ * offset. `attachmentPx` is an ESTIMATE (documented as such, never presented as a
+ * directly observed landmark) of where a necklace's own attachment point should meet
+ * the body -- near the base of the neck / collarbone -- computed by interpolating
+ * along the REAL, per-frame measured distance between the bottom of the face bounding
+ * box (a chin proxy) and the shoulder midpoint. See geometry.ts's
+ * `computeNeckReferenceFrame` for the full derivation and why this adapts correctly to
+ * camera distance, head tilt, and framing instead of a fixed constant. */
+export interface NeckReferenceFrame {
+  /** Where the necklace's own attachment point should be placed. */
+  attachmentPx: PixelPoint;
+  /** Horizontal center of the neck/body (shoulder midpoint x) -- the body centerline. */
+  centerPx: PixelPoint;
+  /** Estimated visible neck width in pixels. Diagnostic only today -- computeScale
+   * still calibrates off the measured shoulder width (see its own docstring). */
+  widthPx: number | null;
+  /** The real, per-frame measured chin-proxy-to-shoulder distance this frame's
+   * attachment point was interpolated along, in pixels. Null when no face was
+   * available (fallback method). */
+  neckLengthPx: number | null;
+  shoulderWidthPx: number;
+  confidence: number;
+  method: "face_chin_to_shoulder_interpolation" | "shoulder_offset_fallback_no_face";
+}
+
 export interface AnchorResult {
   success: boolean;
   anchorPx: PixelPoint | null;

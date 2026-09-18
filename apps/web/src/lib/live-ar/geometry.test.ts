@@ -4,7 +4,7 @@ import {
   EAR_ANCHOR_VERTICAL_OFFSET_FRACTION,
   MAX_EARRING_ROTATION_DEGREES,
   MAX_NECKLACE_ROTATION_DEGREES,
-  NECKLACE_NECK_ANCHOR_FRACTION,
+  NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
 } from "@/lib/live-ar/constants";
 import {
   buildLiveTransform,
@@ -76,42 +76,24 @@ describe("computeAnchor — earrings (mirrors ai/tests/test_geometry_anchors.py)
   });
 });
 
-function poseWithShoulders(leftX = 0.35, rightX = 0.65, y = 0.4, mouthY = 0.1): LivePoseLandmarks {
+function poseWithShoulders(leftX = 0.35, rightX = 0.65, y = 0.4): LivePoseLandmarks {
   const landmarks: NormalizedPoint[] = Array.from({ length: 13 }, () => ({ x: 0.5, y: 0.1, visibility: 0.9 }));
-  landmarks[9] = { x: 0.48, y: mouthY, visibility: 0.9 }; // mouth left corner
-  landmarks[10] = { x: 0.52, y: mouthY, visibility: 0.9 }; // mouth right corner
   landmarks[11] = { x: leftX, y, visibility: 0.9 };
   landmarks[12] = { x: rightX, y, visibility: 0.9 };
   return { landmarks, confidence: 0.9 };
 }
 
-describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py, plus the Live-AR-only neck-interpolation refinement)", () => {
-  it("interpolates between the mouth landmarks and the shoulder midpoint toward the collarbone", () => {
+describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py)", () => {
+  it("applies the documented vertical offset toward the collarbone", () => {
     const pose = poseWithShoulders();
     const result = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H);
     expect(result.success).toBe(true);
     const shoulderWidthPx = (0.65 - 0.35) * IMAGE_W;
-    const mouthMidYPx = 0.1 * IMAGE_H;
-    const shoulderYPx = 0.4 * IMAGE_H;
-    const expectedX = 0.5 * IMAGE_W; // mouth and shoulder midpoints are both centered
-    const expectedY = mouthMidYPx + NECKLACE_NECK_ANCHOR_FRACTION * (shoulderYPx - mouthMidYPx);
+    const expectedX = 0.5 * IMAGE_W;
+    const expectedY = 0.4 * IMAGE_H + NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION * shoulderWidthPx;
     expect(result.anchorPx!.x).toBeCloseTo(expectedX, 6);
     expect(result.anchorPx!.y).toBeCloseTo(expectedY, 6);
     expect(result.referenceMeasurementPx).toBeCloseTo(shoulderWidthPx, 6);
-    expect(result.method).toBe("pose_mouth_to_shoulder_neck_interpolation");
-  });
-
-  it("adapts to a longer visible neck (mouth further from shoulders) without changing shoulder width", () => {
-    const shortNeck = computeAnchor("necklace", null, null, poseWithShoulders(0.35, 0.65, 0.4, 0.1), IMAGE_W, IMAGE_H);
-    const longNeck = computeAnchor("necklace", null, null, poseWithShoulders(0.35, 0.65, 0.4, 0.02), IMAGE_W, IMAGE_H);
-    // NECKLACE_NECK_ANCHOR_FRACTION > 1 extrapolates PAST the shoulder line by a
-    // fraction of the mouth-to-shoulder distance itself (see that constant's
-    // docstring), so a mouth landmark further above the shoulders (a longer visible
-    // neck/span) increases that overshoot -- the anchor lands further BELOW the
-    // shoulder line, not above it, even though shoulder width -- and thus the OLD
-    // fixed-offset formula's result -- would have been identical in both cases.
-    expect(longNeck.anchorPx!.y).toBeGreaterThan(shortNeck.anchorPx!.y);
-    expect(longNeck.referenceMeasurementPx).toBeCloseTo(shortNeck.referenceMeasurementPx!, 6);
   });
 
   it("fails with a structured code when there is no pose", () => {
@@ -134,6 +116,22 @@ describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py,
     const long = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H, "long");
     expect(short.anchorPx!.y).toBeLessThan(baseline.anchorPx!.y);
     expect(baseline.anchorPx!.y).toBeLessThan(long.anchorPx!.y);
+  });
+
+  it("WIRING CHECK: computeAnchor actually delegates to the face+shoulder neck reference frame when a face is provided (regression guard for the earlier photo-anchor bug where code existed but the runtime kept using the old path)", () => {
+    const pose = poseWithShoulders(0.35, 0.65, 0.4);
+    const face: LiveFaceLandmarks = {
+      landmarks: [],
+      faceBoundingBox: { xMin: 0.3, yMin: -0.1, xMax: 0.7, yMax: 0.2 },
+      detectionConfidence: 0.9,
+    };
+    const withFace = computeAnchor("necklace", null, face, pose, IMAGE_W, IMAGE_H);
+    const withoutFace = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H);
+    expect(withFace.method).toBe("face_chin_to_shoulder_interpolation");
+    expect(withoutFace.method).toBe("shoulder_offset_fallback_no_face");
+    // The two methods use genuinely different math -- their results must differ, not
+    // just their method labels.
+    expect(withFace.anchorPx!.y).not.toBeCloseTo(withoutFace.anchorPx!.y, 1);
   });
 });
 
