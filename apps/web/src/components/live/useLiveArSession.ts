@@ -6,14 +6,20 @@ import type { AssetWithPreviewResponse } from "@/lib/catalogue-types";
 import { loadJewelleryAssetTexture } from "@/lib/live-ar/asset-cache";
 import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar/camera";
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
+import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { planCategoryRenders } from "@/lib/live-ar/geometry";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
-import { drawJewelleryOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
+import { drawJewelleryOverlay, drawNecklaceDebugOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
 import { createLiveTrackers, detectFrame, type LiveTrackers } from "@/lib/live-ar/tracking";
 import { TrackingStateMachine } from "@/lib/live-ar/tracking-state";
 import type { CategorySlug, JewelleryAssetGeometry, LiveTransform, TrackingStatus } from "@/lib/live-ar/types";
+
+// How often the debug NUMERIC readout (not the canvas overlay, which is drawn every
+// frame) is copied into React state, to avoid a setState-triggered re-render 30-60
+// times a second. Purely a UI-update-rate choice -- has no effect on the geometry.
+const DEBUG_SNAPSHOT_STATE_THROTTLE_MS = 300;
 
 export type CameraStatus = "idle" | "starting" | "ready" | "error";
 export type TrackersStatus = "idle" | "loading" | "ready" | "error";
@@ -49,6 +55,10 @@ export interface UseLiveArSessionArgs {
   jewelleryId: string | null;
   asset: AssetWithPreviewResponse | null;
   necklaceLength?: string | null;
+  /** Draws the necklace geometry debug overlay (face/shoulder/neck/jewellery attachment
+   * points) and exposes the raw numeric snapshot via `debugSnapshot`. Diagnostic-only --
+   * never affects the actual jewellery placement/rendering. */
+  debugEnabled?: boolean;
 }
 
 export interface UseLiveArSessionResult {
@@ -64,6 +74,10 @@ export interface UseLiveArSessionResult {
   trackingStatus: TrackingStatus;
   readiness: ReadinessResult<string> | null;
   performance: PerformanceSnapshot;
+  /** Latest necklace geometry debug snapshot (see debug.ts), throttled to ~3/sec so the
+   * numeric readout doesn't force a re-render every frame. Null when debugEnabled is
+   * false, the category isn't "necklace", or there's no valid transform this frame. */
+  debugSnapshot: NecklaceDebugSnapshot | null;
   /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
    * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
    * canvas isn't ready yet. */
@@ -72,7 +86,13 @@ export interface UseLiveArSessionResult {
 
 const DROPPED_FRAME_THRESHOLD_MS = 1000 / 20; // spec's 24fps-min target with headroom
 
-export function useLiveArSession({ category, jewelleryId, asset, necklaceLength = null }: UseLiveArSessionArgs): UseLiveArSessionResult {
+export function useLiveArSession({
+  category,
+  jewelleryId,
+  asset,
+  necklaceLength = null,
+  debugEnabled = false,
+}: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -92,6 +112,10 @@ export function useLiveArSession({ category, jewelleryId, asset, necklaceLength 
   const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>("TRACKING_LOST");
   const [readiness, setReadiness] = useState<ReadinessResult<string> | null>(null);
   const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot>(performanceTrackerRef.current.snapshot());
+  const [debugSnapshot, setDebugSnapshot] = useState<NecklaceDebugSnapshot | null>(null);
+  const lastDebugStateUpdateAtMsRef = useRef<number>(0);
+  const debugEnabledRef = useRef(debugEnabled);
+  debugEnabledRef.current = debugEnabled;
 
   // Start the camera once per mount.
   useEffect(() => {
@@ -229,6 +253,28 @@ export function useLiveArSession({ category, jewelleryId, asset, necklaceLength 
       }
       const t3 = performance.now();
 
+      // Debug overlay: uses the SAME actually-rendered (post-smoothing) transform just
+      // drawn above, on the SAME live frame -- never a re-derivation, so this can't
+      // silently drift from what the person is actually seeing on screen.
+      if (debugEnabledRef.current && category === "necklace" && loaded) {
+        const necklaceOverlay = overlays[0] ?? null;
+        const snapshot = computeNecklaceDebugSnapshot(
+          face,
+          pose,
+          videoWidthPx,
+          videoHeightPx,
+          loaded.geometry,
+          necklaceOverlay?.transform ?? null
+        );
+        if (snapshot) {
+          drawNecklaceDebugOverlay(ctx, snapshot);
+          if (frameStartMs - lastDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
+            lastDebugStateUpdateAtMsRef.current = frameStartMs;
+            setDebugSnapshot(snapshot);
+          }
+        }
+      }
+
       const totalFrameMs = previousFrameAtMs === null ? t3 - t0 : frameStartMs - previousFrameAtMs;
       performanceTrackerRef.current.record({
         totalFrameMs,
@@ -276,6 +322,7 @@ export function useLiveArSession({ category, jewelleryId, asset, necklaceLength 
     trackingStatus,
     readiness,
     performance: performanceSnapshot,
+    debugSnapshot,
     captureFrame,
   };
 }

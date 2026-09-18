@@ -28,7 +28,8 @@
  * draw or when (that is the live session hook/component that owns the animation-frame
  * loop) and it never re-fetches or re-decodes the jewellery image (see asset-cache.ts).
  */
-import type { LiveTransform } from "@/lib/live-ar/types";
+import type { LiveTransform, PixelPoint } from "@/lib/live-ar/types";
+import type { NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 
 export interface RenderableFrame {
   video: CanvasImageSource;
@@ -73,6 +74,59 @@ export function drawJewelleryOverlay(
   ctx.scale(transform.mirrored ? -transform.scaleFactor : transform.scaleFactor, transform.scaleFactor);
   ctx.drawImage(image, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);
   ctx.restore();
+}
+
+function drawDebugPoint(ctx: CanvasRenderingContext2D, point: PixelPoint, color: string, label: string): void {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.font = "12px monospace";
+  ctx.fillStyle = "white";
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 3;
+  ctx.strokeText(label, point.x + 8, point.y - 8);
+  ctx.fillText(label, point.x + 8, point.y - 8);
+  ctx.restore();
+}
+
+/** Draws every point in a `NecklaceDebugSnapshot` directly onto the canvas, in the SAME
+ * unmirrored pixel space the jewellery sprite itself is drawn in (see debug.ts's file
+ * docstring for why that's correct without any extra mirroring math here). This answers
+ * "where does the algorithm THINK the neck is" visually, on the actual runtime frame --
+ * not a synthetic fixture, not a unit test. Purely a diagnostic aid; never called unless
+ * the caller explicitly enables debug mode (see useLiveArSession.ts). */
+export function drawNecklaceDebugOverlay(ctx: CanvasRenderingContext2D, snapshot: NecklaceDebugSnapshot): void {
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "cyan";
+  ctx.lineWidth = 1;
+  // Body centerline (vertical line through the shoulder midpoint).
+  if (snapshot.shoulderMidpointPx) {
+    ctx.beginPath();
+    ctx.moveTo(snapshot.shoulderMidpointPx.x, 0);
+    ctx.lineTo(snapshot.shoulderMidpointPx.x, snapshot.imageHeightPx);
+    ctx.stroke();
+  }
+  // Final transformed visible bbox.
+  const [l, t, r, b] = snapshot.finalVisibleBboxPx;
+  ctx.strokeStyle = "yellow";
+  ctx.strokeRect(l, t, r - l, b - t);
+  ctx.restore();
+
+  if (snapshot.faceCenterPx) drawDebugPoint(ctx, snapshot.faceCenterPx, "orange", "FACE CENTER");
+  if (snapshot.leftEarPx) drawDebugPoint(ctx, snapshot.leftEarPx, "orange", "LEFT EAR");
+  if (snapshot.rightEarPx) drawDebugPoint(ctx, snapshot.rightEarPx, "orange", "RIGHT EAR");
+  if (snapshot.leftShoulderPx) drawDebugPoint(ctx, snapshot.leftShoulderPx, "lime", "LEFT SHOULDER");
+  if (snapshot.rightShoulderPx) drawDebugPoint(ctx, snapshot.rightShoulderPx, "lime", "RIGHT SHOULDER");
+  if (snapshot.shoulderMidpointPx) drawDebugPoint(ctx, snapshot.shoulderMidpointPx, "lime", "SHOULDER MID");
+  if (snapshot.neckCenterPx) drawDebugPoint(ctx, snapshot.neckCenterPx, "magenta", "NECK CENTER");
+  if (snapshot.neckAttachmentPx) drawDebugPoint(ctx, snapshot.neckAttachmentPx, "red", "NECK ATTACHMENT");
+  drawDebugPoint(ctx, snapshot.finalAttachmentPx, "white", "JEWELLERY ATTACHMENT");
 }
 
 /** Resizes a canvas to match the video's intrinsic pixel dimensions. Call this only

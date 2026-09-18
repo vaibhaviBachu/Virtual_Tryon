@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
+import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { formatPerformanceOverlayText } from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
@@ -40,6 +41,11 @@ export function LiveArStudio() {
   const [selectedJewelleryId, setSelectedJewelleryId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showPerfOverlay, setShowPerfOverlay] = useState(false);
+  // Necklace geometry debug mode (temporary diagnostic tooling -- see debug.ts):
+  // draws face/shoulder/neck/jewellery attachment points on the live canvas and shows
+  // their raw numeric values, so a real-camera placement question can be answered with
+  // actual runtime numbers instead of a screenshot and a guess.
+  const [showDebugOverlay, setShowDebugOverlay] = useState(false);
   const [captureState, setCaptureState] = useState<"idle" | "capturing" | "done" | "error">("idle");
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureErrorMessage, setCaptureErrorMessage] = useState<string | null>(null);
@@ -86,6 +92,7 @@ export function LiveArStudio() {
     category,
     jewelleryId: selectedJewelleryId,
     asset: assetWithPreviewQuery.data ?? null,
+    debugEnabled: showDebugOverlay,
   });
 
   async function handleCapture() {
@@ -171,12 +178,27 @@ export function LiveArStudio() {
               >
                 {showPerfOverlay ? "Hide" : "Show"} performance
               </button>
+              {category === "necklace" && (
+                <button
+                  type="button"
+                  className="text-xs text-neutral-400 underline-offset-2 hover:underline"
+                  onClick={() => setShowDebugOverlay((v) => !v)}
+                >
+                  {showDebugOverlay ? "Hide" : "Show"} necklace debug
+                </button>
+              )}
               <Button onClick={handleCapture} disabled={isLoadingPipeline || captureState === "capturing"}>
                 {captureState === "capturing" ? "Saving…" : "Capture"}
               </Button>
             </div>
           </CardContent>
         </Card>
+
+        {showDebugOverlay && category === "necklace" && session.debugSnapshot && (
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-lime-300">
+            {formatNecklaceDebugSnapshot(session.debugSnapshot)}
+          </pre>
+        )}
 
         {captureState === "done" && captureUrl && (
           <p className="mt-3 text-sm text-neutral-500">
