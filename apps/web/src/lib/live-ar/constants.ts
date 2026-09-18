@@ -57,16 +57,23 @@ export const NECKLACE_LENGTH_OFFSET_MULTIPLIER: Record<string, number> = {
 
 // How far down the (chin-proxy -> shoulder-midpoint) span the necklace's attachment
 // point sits: 0 = right at the chin, 1 = right at the shoulder line.
-// Recalibrated from 0.85 -> 0.65 after real-device Live AR verification (2026-09-18):
-// with the asset-level anchor bug fixed (this asset's stored anchor_x/anchor_y
-// override, unrelated to this constant, was dragging the whole necklace image up --
-// see the commit removing it), 0.85 placed the attachment right at the collarbone/
-// chest line, which read as "too low" on camera once the asset itself was anchored
-// correctly. 0.65 moves the attachment two-thirds of the way down the measured
-// chin-to-shoulder span instead of nearly all the way -- still a proportion of the
-// real per-frame measurement, not a fixed pixel offset. Verify again against a live
-// camera; tune further only against this same measured span, never a raw constant.
-export const NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH = 0.65;
+// History (2026-09-18), each step verified against a real camera, not guessed:
+//   0.85 -> too low once the asset-level anchor bug was fixed (see the commit removing
+//          this asset's bad anchor_x/anchor_y database override) -- landed at the
+//          collarbone/chest line.
+//   0.65 -> still too low.
+//   0.10 -> confirmed correct against a real camera using the in-app calibration
+//           slider (LiveArStudio's necklace debug panel -- see
+//           neck-fraction-override.ts), which changes the actual rendered position
+//           live so this value is measured empirically, not eyeballed from a fixed
+//           rebuild-per-attempt loop. MediaPipe has no "neck base"/collarbone landmark
+//           to derive this from directly (there is no published anthropometric ratio
+//           for this specific chin-proxy-to-shoulder pairing either -- it's an artifact
+//           of this pipeline's own proxy landmarks, not a standardized measurement), so
+//           some proportion is unavoidable; this is the one confirmed to land correctly
+//           for a real person on a real camera. Re-verify with the slider (not another
+//           blind edit here) if a different necklace design or camera setup looks off.
+export const NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH = 0.1;
 
 // Diagnostic-only estimate of visible neck width, as a fraction of the measured face
 // bounding-box width. Anthropometric surveys put adult neck width at roughly 75-85% of

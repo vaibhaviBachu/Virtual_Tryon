@@ -9,6 +9,11 @@ import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catal
 import { createLiveArCapture } from "@/lib/live-ar-api";
 import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH } from "@/lib/live-ar/constants";
+import {
+  clearSavedNeckFractionOverride,
+  readSavedNeckFractionOverride,
+  saveNeckFractionOverride,
+} from "@/lib/live-ar/neck-fraction-override";
 import { formatPerformanceOverlayText } from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
@@ -47,13 +52,21 @@ export function LiveArStudio() {
   // their raw numeric values, so a real-camera placement question can be answered with
   // actual runtime numbers instead of a screenshot and a guess.
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
-  // Live-tunable preview of NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH (temporary
-  // calibration tooling -- see neck-reference.ts's computeNeckReferenceFrame
-  // docstring). Dragging this changes the ACTUAL rendered position in real time so the
-  // right value can be found against a real camera without a rebuild per attempt; it
-  // does not persist anywhere -- once a value looks right, it gets typed into
-  // constants.ts as the new shipped default and this resets back to that constant.
-  const [neckFractionPreview, setNeckFractionPreview] = useState(NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH);
+  // Persisted, per-browser calibration override (see neck-fraction-override.ts) -- the
+  // automatic default from constants.ts is used unless/until someone saves a value from
+  // the slider below, at which point it applies on every necklace session in THIS
+  // browser, debug panel open or not, until cleared. Lazy-init from storage so the very
+  // first render already reflects a previously saved value (no flash of the default).
+  const [savedNeckFraction, setSavedNeckFraction] = useState<number | null>(() => readSavedNeckFractionOverride());
+  // Live-tunable preview of the fraction while the slider is being dragged (see
+  // neck-reference.ts's computeNeckReferenceFrame docstring). Dragging this changes the
+  // ACTUAL rendered position in real time so the right value can be found against a real
+  // camera without a rebuild per attempt. Starts from whatever's already saved (if
+  // anything), so re-opening the panel picks up where you left off.
+  const [neckFractionPreview, setNeckFractionPreview] = useState(
+    () => readSavedNeckFractionOverride() ?? NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH
+  );
+  const [neckFractionSavedJustNow, setNeckFractionSavedJustNow] = useState(false);
   const [captureState, setCaptureState] = useState<"idle" | "capturing" | "done" | "error">("idle");
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureErrorMessage, setCaptureErrorMessage] = useState<string | null>(null);
@@ -101,7 +114,11 @@ export function LiveArStudio() {
     jewelleryId: selectedJewelleryId,
     asset: assetWithPreviewQuery.data ?? null,
     debugEnabled: showDebugOverlay,
-    debugNeckFractionOverride: category === "necklace" && showDebugOverlay ? neckFractionPreview : null,
+    // While the debug panel is open, the slider previews live (even before it's saved).
+    // Otherwise, fall back to whatever's been saved for this browser (if anything) --
+    // this is what makes "drag it, click Done" actually stick for ordinary use, not
+    // just while the debug panel happens to be open.
+    debugNeckFractionOverride: category === "necklace" ? (showDebugOverlay ? neckFractionPreview : savedNeckFraction) : null,
   });
 
   async function handleCapture() {
@@ -215,21 +232,59 @@ export function LiveArStudio() {
                 max={1}
                 step={0.01}
                 value={neckFractionPreview}
-                onChange={(e) => setNeckFractionPreview(Number(e.target.value))}
+                onChange={(e) => {
+                  setNeckFractionPreview(Number(e.target.value));
+                  setNeckFractionSavedJustNow(false);
+                }}
                 className="flex-1"
               />
+            </label>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                onClick={() => {
+                  saveNeckFractionOverride(neckFractionPreview);
+                  setSavedNeckFraction(neckFractionPreview);
+                  setNeckFractionSavedJustNow(true);
+                }}
+              >
+                Done -- fix at {neckFractionPreview.toFixed(2)}
+              </Button>
               <button
                 type="button"
                 className="whitespace-nowrap text-neutral-400 underline-offset-2 hover:underline"
-                onClick={() => setNeckFractionPreview(NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH)}
+                onClick={() => {
+                  setNeckFractionPreview(NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH);
+                  setNeckFractionSavedJustNow(false);
+                }}
               >
-                Reset to shipped ({NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH.toFixed(2)})
+                Reset slider to automatic ({NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH.toFixed(2)})
               </button>
-            </label>
-            <p className="mt-1 text-[10px] text-neutral-500">
-              0 = right at the chin, 1 = right at the shoulder line. This changes what you see live so the correct
-              value can be found against your real camera -- it isn&apos;t saved anywhere. Once it looks right, report
-              the number back so it can be shipped as the new default.
+              {savedNeckFraction !== null && (
+                <button
+                  type="button"
+                  className="whitespace-nowrap text-neutral-400 underline-offset-2 hover:underline"
+                  onClick={() => {
+                    clearSavedNeckFractionOverride();
+                    setSavedNeckFraction(null);
+                    setNeckFractionPreview(NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH);
+                    setNeckFractionSavedJustNow(false);
+                  }}
+                >
+                  Clear saved fix (go back to automatic)
+                </button>
+              )}
+              {neckFractionSavedJustNow && <span className="text-lime-400">Saved -- this position is now fixed on this device.</span>}
+              {!neckFractionSavedJustNow && savedNeckFraction !== null && (
+                <span className="text-neutral-500">Currently fixed at {savedNeckFraction.toFixed(2)} on this device.</span>
+              )}
+            </div>
+            <p className="mt-2 text-[10px] text-neutral-500">
+              0 = right at the chin, 1 = right at the shoulder line. Dragging changes what you see live, on this
+              frame, so you can find the right spot against your real camera. The automatic value (
+              {NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH.toFixed(2)}) is used until you click Done -- once you do, that
+              exact position is fixed for every necklace try-on in this browser, debug panel open or not, until you
+              clear it.
             </p>
           </div>
         )}
