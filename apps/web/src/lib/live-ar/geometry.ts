@@ -152,9 +152,10 @@ function computeNecklaceAnchor(
   pose: LivePoseLandmarks | null,
   imageWidthPx: number,
   imageHeightPx: number,
-  necklaceLength: string | null
+  necklaceLength: string | null,
+  neckFractionOverride?: number
 ): AnchorResult {
-  const neck = computeNeckReferenceFrame(face, pose, imageWidthPx, imageHeightPx);
+  const neck = computeNeckReferenceFrame(face, pose, imageWidthPx, imageHeightPx, neckFractionOverride);
   if (neck === null) {
     return { success: false, anchorPx: null, referenceMeasurementPx: null, method: "none", errorCode: "NECK_NOT_VISIBLE" };
   }
@@ -178,10 +179,11 @@ export function computeAnchor(
   pose: LivePoseLandmarks | null,
   imageWidthPx: number,
   imageHeightPx: number,
-  necklaceLength: string | null = null
+  necklaceLength: string | null = null,
+  neckFractionOverride?: number
 ): AnchorResult {
   if (category === "earrings") return computeEarAnchor(side, face, imageWidthPx, imageHeightPx);
-  if (category === "necklace") return computeNecklaceAnchor(face, pose, imageWidthPx, imageHeightPx, necklaceLength);
+  if (category === "necklace") return computeNecklaceAnchor(face, pose, imageWidthPx, imageHeightPx, necklaceLength, neckFractionOverride);
   return { success: false, anchorPx: null, referenceMeasurementPx: null, method: "none", errorCode: "UNSUPPORTED_CATEGORY" };
 }
 
@@ -338,10 +340,13 @@ export function planCategoryRenders(
   pose: LivePoseLandmarks | null,
   imageWidthPx: number,
   imageHeightPx: number,
-  necklaceLength: string | null = null
+  necklaceLength: string | null = null,
+  // Diagnostic-only calibration override -- see computeNeckReferenceFrame's docstring.
+  // Always undefined outside the debug slider; every real render uses the shipped constant.
+  neckFractionOverride?: number
 ): CategoryRenderPlan[] {
   if (category === "necklace") {
-    const anchor = computeAnchor("necklace", null, face, pose, imageWidthPx, imageHeightPx, necklaceLength);
+    const anchor = computeAnchor("necklace", null, face, pose, imageWidthPx, imageHeightPx, necklaceLength, neckFractionOverride);
     const scale = computeScale("necklace", assetGeometry, anchor);
     const rotation = computeRotation("necklace", null, pose, imageWidthPx, imageHeightPx);
     return [{ slot: "necklace", transform: buildLiveTransform(assetGeometry, anchor, scale, rotation, false) }];

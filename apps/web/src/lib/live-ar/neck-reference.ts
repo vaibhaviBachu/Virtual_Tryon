@@ -36,11 +36,17 @@ export function computeNeckReferenceFrame(
   face: LiveFaceLandmarks | null,
   pose: LivePoseLandmarks | null,
   imageWidthPx: number,
-  imageHeightPx: number
+  imageHeightPx: number,
+  // Diagnostic-only: lets the debug UI (LiveArStudio's calibration slider) preview a
+  // different fraction live, without rebuilding. `undefined` (the default for every
+  // real render path) uses the shipped constant. NEVER read from anywhere but that one
+  // debug control -- this is not a second, competing source of truth for the fraction.
+  fractionOverride?: number
 ): NeckReferenceFrame | null {
   const body = computeBodyReferenceFrame(pose, imageWidthPx, imageHeightPx);
   if (body === null) return null; // no shoulders visible at all -- nothing to anchor to
 
+  const fraction = fractionOverride ?? NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH;
   const bbox = face?.faceBoundingBox ?? null;
   if (face !== null && bbox !== null && face.detectionConfidence >= FACE_CONFIDENCE_THRESHOLD) {
     const chinProxyYPx = bbox.yMax * imageHeightPx; // bottom of the face oval, approximates the chin
@@ -53,7 +59,7 @@ export function computeNeckReferenceFrame(
     if (neckLengthPx > 0) {
       const attachmentPx: PixelPoint = {
         x: body.shoulderMidpointPx.x,
-        y: chinProxyYPx + NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH * neckLengthPx,
+        y: chinProxyYPx + fraction * neckLengthPx,
       };
       return {
         attachmentPx,

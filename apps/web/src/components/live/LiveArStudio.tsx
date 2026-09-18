@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
 import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
+import { NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH } from "@/lib/live-ar/constants";
 import { formatPerformanceOverlayText } from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
@@ -46,6 +47,13 @@ export function LiveArStudio() {
   // their raw numeric values, so a real-camera placement question can be answered with
   // actual runtime numbers instead of a screenshot and a guess.
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  // Live-tunable preview of NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH (temporary
+  // calibration tooling -- see neck-reference.ts's computeNeckReferenceFrame
+  // docstring). Dragging this changes the ACTUAL rendered position in real time so the
+  // right value can be found against a real camera without a rebuild per attempt; it
+  // does not persist anywhere -- once a value looks right, it gets typed into
+  // constants.ts as the new shipped default and this resets back to that constant.
+  const [neckFractionPreview, setNeckFractionPreview] = useState(NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH);
   const [captureState, setCaptureState] = useState<"idle" | "capturing" | "done" | "error">("idle");
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureErrorMessage, setCaptureErrorMessage] = useState<string | null>(null);
@@ -93,6 +101,7 @@ export function LiveArStudio() {
     jewelleryId: selectedJewelleryId,
     asset: assetWithPreviewQuery.data ?? null,
     debugEnabled: showDebugOverlay,
+    debugNeckFractionOverride: category === "necklace" && showDebugOverlay ? neckFractionPreview : null,
   });
 
   async function handleCapture() {
@@ -193,6 +202,37 @@ export function LiveArStudio() {
             </div>
           </CardContent>
         </Card>
+
+        {showDebugOverlay && category === "necklace" && (
+          <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
+            <label className="flex items-center gap-3">
+              <span className="whitespace-nowrap">
+                Neck attachment fraction (chin&rarr;shoulder): <span className="font-mono text-lime-300">{neckFractionPreview.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={neckFractionPreview}
+                onChange={(e) => setNeckFractionPreview(Number(e.target.value))}
+                className="flex-1"
+              />
+              <button
+                type="button"
+                className="whitespace-nowrap text-neutral-400 underline-offset-2 hover:underline"
+                onClick={() => setNeckFractionPreview(NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH)}
+              >
+                Reset to shipped ({NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH.toFixed(2)})
+              </button>
+            </label>
+            <p className="mt-1 text-[10px] text-neutral-500">
+              0 = right at the chin, 1 = right at the shoulder line. This changes what you see live so the correct
+              value can be found against your real camera -- it isn&apos;t saved anywhere. Once it looks right, report
+              the number back so it can be shipped as the new default.
+            </p>
+          </div>
+        )}
 
         {showDebugOverlay && category === "necklace" && session.debugSnapshot && (
           <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-lime-300">

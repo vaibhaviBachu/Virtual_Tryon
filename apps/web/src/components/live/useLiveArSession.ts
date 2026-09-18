@@ -59,6 +59,12 @@ export interface UseLiveArSessionArgs {
    * points) and exposes the raw numeric snapshot via `debugSnapshot`. Diagnostic-only --
    * never affects the actual jewellery placement/rendering. */
   debugEnabled?: boolean;
+  /** Diagnostic-only: live-previews NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH at a
+   * different value (see neck-reference.ts's computeNeckReferenceFrame docstring),
+   * so the calibration slider in LiveArStudio can be tuned against the real camera
+   * without a Docker rebuild per attempt. `null`/`undefined` uses the shipped constant --
+   * this DOES affect the actual rendered position while set, unlike debugEnabled. */
+  debugNeckFractionOverride?: number | null;
 }
 
 export interface UseLiveArSessionResult {
@@ -92,6 +98,7 @@ export function useLiveArSession({
   asset,
   necklaceLength = null,
   debugEnabled = false,
+  debugNeckFractionOverride = null,
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -116,6 +123,10 @@ export function useLiveArSession({
   const lastDebugStateUpdateAtMsRef = useRef<number>(0);
   const debugEnabledRef = useRef(debugEnabled);
   debugEnabledRef.current = debugEnabled;
+  // Read fresh every frame from a ref (not render-loop-effect state) so dragging the
+  // calibration slider doesn't tear down and restart tracking/smoothing state each tick.
+  const debugNeckFractionOverrideRef = useRef(debugNeckFractionOverride);
+  debugNeckFractionOverrideRef.current = debugNeckFractionOverride;
 
   // Start the camera once per mount.
   useEffect(() => {
@@ -231,7 +242,16 @@ export function useLiveArSession({
       let primaryStatus: TrackingStatus = "TRACKING_LOST";
 
       if (loaded) {
-        const plans = planCategoryRenders(category, loaded.geometry, face, pose, videoWidthPx, videoHeightPx, necklaceLength);
+        const plans = planCategoryRenders(
+          category,
+          loaded.geometry,
+          face,
+          pose,
+          videoWidthPx,
+          videoHeightPx,
+          necklaceLength,
+          debugNeckFractionOverrideRef.current ?? undefined
+        );
         overlays = plans.flatMap((plan, index) => {
           let slot = slotsRef.current.get(plan.slot);
           if (!slot) {
@@ -264,7 +284,8 @@ export function useLiveArSession({
           videoWidthPx,
           videoHeightPx,
           loaded.geometry,
-          necklaceOverlay?.transform ?? null
+          necklaceOverlay?.transform ?? null,
+          debugNeckFractionOverrideRef.current ?? undefined
         );
         if (snapshot) {
           drawNecklaceDebugOverlay(ctx, snapshot);
