@@ -104,10 +104,13 @@ describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py,
   it("adapts to a longer visible neck (mouth further from shoulders) without changing shoulder width", () => {
     const shortNeck = computeAnchor("necklace", null, null, poseWithShoulders(0.35, 0.65, 0.4, 0.1), IMAGE_W, IMAGE_H);
     const longNeck = computeAnchor("necklace", null, null, poseWithShoulders(0.35, 0.65, 0.4, 0.02), IMAGE_W, IMAGE_H);
-    // A mouth landmark further above the shoulders (smaller y) pulls the interpolated
-    // anchor's y up too, even though shoulder width -- and thus the OLD fixed-offset
-    // formula's result -- would have been identical in both cases.
-    expect(longNeck.anchorPx!.y).toBeLessThan(shortNeck.anchorPx!.y);
+    // NECKLACE_NECK_ANCHOR_FRACTION > 1 extrapolates PAST the shoulder line by a
+    // fraction of the mouth-to-shoulder distance itself (see that constant's
+    // docstring), so a mouth landmark further above the shoulders (a longer visible
+    // neck/span) increases that overshoot -- the anchor lands further BELOW the
+    // shoulder line, not above it, even though shoulder width -- and thus the OLD
+    // fixed-offset formula's result -- would have been identical in both cases.
+    expect(longNeck.anchorPx!.y).toBeGreaterThan(shortNeck.anchorPx!.y);
     expect(longNeck.referenceMeasurementPx).toBeCloseTo(shortNeck.referenceMeasurementPx!, 6);
   });
 
