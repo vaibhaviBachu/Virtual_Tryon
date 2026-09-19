@@ -14,6 +14,11 @@ import {
   readSavedNeckFractionOverride,
   saveNeckFractionOverride,
 } from "@/lib/live-ar/neck-fraction-override";
+import {
+  clearSavedNeckHorizontalOffsetOverride,
+  readSavedNeckHorizontalOffsetOverride,
+  saveNeckHorizontalOffsetOverride,
+} from "@/lib/live-ar/neck-horizontal-offset-override";
 import { formatPerformanceOverlayText } from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
@@ -67,6 +72,15 @@ export function LiveArStudio() {
     () => readSavedNeckFractionOverride() ?? NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH
   );
   const [neckFractionSavedJustNow, setNeckFractionSavedJustNow] = useState(false);
+  // Same pattern as the vertical (chin->shoulder) fraction above, for the necklace
+  // anchor's horizontal position -- see neck-horizontal-offset-override.ts.
+  const [savedNeckHorizontalOffset, setSavedNeckHorizontalOffset] = useState<number | null>(
+    () => readSavedNeckHorizontalOffsetOverride()
+  );
+  const [neckHorizontalOffsetPreview, setNeckHorizontalOffsetPreview] = useState(
+    () => readSavedNeckHorizontalOffsetOverride() ?? 0
+  );
+  const [neckHorizontalOffsetSavedJustNow, setNeckHorizontalOffsetSavedJustNow] = useState(false);
   const [captureState, setCaptureState] = useState<"idle" | "capturing" | "done" | "error">("idle");
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureErrorMessage, setCaptureErrorMessage] = useState<string | null>(null);
@@ -119,6 +133,8 @@ export function LiveArStudio() {
     // this is what makes "drag it, click Done" actually stick for ordinary use, not
     // just while the debug panel happens to be open.
     debugNeckFractionOverride: category === "necklace" ? (showDebugOverlay ? neckFractionPreview : savedNeckFraction) : null,
+    debugNeckHorizontalOffsetOverride:
+      category === "necklace" ? (showDebugOverlay ? neckHorizontalOffsetPreview : savedNeckHorizontalOffset) : null,
   });
 
   async function handleCapture() {
@@ -285,6 +301,77 @@ export function LiveArStudio() {
               {NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH.toFixed(2)}) is used until you click Done -- once you do, that
               exact position is fixed for every necklace try-on in this browser, debug panel open or not, until you
               clear it.
+            </p>
+          </div>
+        )}
+
+        {showDebugOverlay && category === "necklace" && (
+          <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
+            <label className="flex items-center gap-3">
+              <span className="whitespace-nowrap">
+                Horizontal offset (fraction of shoulder width):{" "}
+                <span className="font-mono text-lime-300">{neckHorizontalOffsetPreview.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={-0.3}
+                max={0.3}
+                step={0.01}
+                value={neckHorizontalOffsetPreview}
+                onChange={(e) => {
+                  setNeckHorizontalOffsetPreview(Number(e.target.value));
+                  setNeckHorizontalOffsetSavedJustNow(false);
+                }}
+                className="flex-1"
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                onClick={() => {
+                  saveNeckHorizontalOffsetOverride(neckHorizontalOffsetPreview);
+                  setSavedNeckHorizontalOffset(neckHorizontalOffsetPreview);
+                  setNeckHorizontalOffsetSavedJustNow(true);
+                }}
+              >
+                Done -- fix at {neckHorizontalOffsetPreview.toFixed(2)}
+              </Button>
+              <button
+                type="button"
+                className="whitespace-nowrap text-neutral-400 underline-offset-2 hover:underline"
+                onClick={() => {
+                  setNeckHorizontalOffsetPreview(0);
+                  setNeckHorizontalOffsetSavedJustNow(false);
+                }}
+              >
+                Reset slider to automatic (0.00)
+              </button>
+              {savedNeckHorizontalOffset !== null && (
+                <button
+                  type="button"
+                  className="whitespace-nowrap text-neutral-400 underline-offset-2 hover:underline"
+                  onClick={() => {
+                    clearSavedNeckHorizontalOffsetOverride();
+                    setSavedNeckHorizontalOffset(null);
+                    setNeckHorizontalOffsetPreview(0);
+                    setNeckHorizontalOffsetSavedJustNow(false);
+                  }}
+                >
+                  Clear saved fix (go back to automatic)
+                </button>
+              )}
+              {neckHorizontalOffsetSavedJustNow && (
+                <span className="text-lime-400">Saved -- this position is now fixed on this device.</span>
+              )}
+              {!neckHorizontalOffsetSavedJustNow && savedNeckHorizontalOffset !== null && (
+                <span className="text-neutral-500">Currently fixed at {savedNeckHorizontalOffset.toFixed(2)} on this device.</span>
+              )}
+            </div>
+            <p className="mt-2 text-[10px] text-neutral-500">
+              0 = centered on the shoulder midpoint (the automatic default). Dragging changes what you see live, on
+              this frame, so you can nudge it left or right against your real camera until it sits exactly on your
+              neckline. Once you click Done, that exact offset is fixed for every necklace try-on in this browser,
+              debug panel open or not, until you clear it.
             </p>
           </div>
         )}

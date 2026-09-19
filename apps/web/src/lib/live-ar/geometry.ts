@@ -153,9 +153,17 @@ function computeNecklaceAnchor(
   imageWidthPx: number,
   imageHeightPx: number,
   necklaceLength: string | null,
-  neckFractionOverride?: number
+  neckFractionOverride?: number,
+  neckHorizontalOffsetOverride?: number
 ): AnchorResult {
-  const neck = computeNeckReferenceFrame(face, pose, imageWidthPx, imageHeightPx, neckFractionOverride);
+  const neck = computeNeckReferenceFrame(
+    face,
+    pose,
+    imageWidthPx,
+    imageHeightPx,
+    neckFractionOverride,
+    neckHorizontalOffsetOverride
+  );
   if (neck === null) {
     return { success: false, anchorPx: null, referenceMeasurementPx: null, method: "none", errorCode: "NECK_NOT_VISIBLE" };
   }
@@ -180,10 +188,20 @@ export function computeAnchor(
   imageWidthPx: number,
   imageHeightPx: number,
   necklaceLength: string | null = null,
-  neckFractionOverride?: number
+  neckFractionOverride?: number,
+  neckHorizontalOffsetOverride?: number
 ): AnchorResult {
   if (category === "earrings") return computeEarAnchor(side, face, imageWidthPx, imageHeightPx);
-  if (category === "necklace") return computeNecklaceAnchor(face, pose, imageWidthPx, imageHeightPx, necklaceLength, neckFractionOverride);
+  if (category === "necklace")
+    return computeNecklaceAnchor(
+      face,
+      pose,
+      imageWidthPx,
+      imageHeightPx,
+      necklaceLength,
+      neckFractionOverride,
+      neckHorizontalOffsetOverride
+    );
   return { success: false, anchorPx: null, referenceMeasurementPx: null, method: "none", errorCode: "UNSUPPORTED_CATEGORY" };
 }
 
@@ -341,12 +359,23 @@ export function planCategoryRenders(
   imageWidthPx: number,
   imageHeightPx: number,
   necklaceLength: string | null = null,
-  // Diagnostic-only calibration override -- see computeNeckReferenceFrame's docstring.
+  // Diagnostic-only calibration overrides -- see computeNeckReferenceFrame's docstring.
   // Always undefined outside the debug slider; every real render uses the shipped constant.
-  neckFractionOverride?: number
+  neckFractionOverride?: number,
+  neckHorizontalOffsetOverride?: number
 ): CategoryRenderPlan[] {
   if (category === "necklace") {
-    const anchor = computeAnchor("necklace", null, face, pose, imageWidthPx, imageHeightPx, necklaceLength, neckFractionOverride);
+    const anchor = computeAnchor(
+      "necklace",
+      null,
+      face,
+      pose,
+      imageWidthPx,
+      imageHeightPx,
+      necklaceLength,
+      neckFractionOverride,
+      neckHorizontalOffsetOverride
+    );
     const scale = computeScale("necklace", assetGeometry, anchor);
     const rotation = computeRotation("necklace", null, pose, imageWidthPx, imageHeightPx);
     return [{ slot: "necklace", transform: buildLiveTransform(assetGeometry, anchor, scale, rotation, false) }];

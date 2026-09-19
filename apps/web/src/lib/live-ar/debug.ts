@@ -123,7 +123,8 @@ export function computeNecklaceDebugSnapshot(
   // Diagnostic-only: mirrors whatever fraction the calibration slider is currently
   // previewing, so this readout's NECK line matches what's actually being rendered
   // instead of always recomputing against the shipped constant.
-  neckFractionOverride?: number
+  neckFractionOverride?: number,
+  neckHorizontalOffsetOverride?: number
 ): NecklaceDebugSnapshot | null {
   if (transform === null) return null;
 
@@ -146,7 +147,14 @@ export function computeNecklaceDebugSnapshot(
     leftShoulderPx && rightShoulderPx ? { x: (leftShoulderPx.x + rightShoulderPx.x) / 2, y: (leftShoulderPx.y + rightShoulderPx.y) / 2 } : null;
   const shoulderWidthPx = leftShoulderPx && rightShoulderPx ? Math.abs(rightShoulderPx.x - leftShoulderPx.x) : null;
 
-  const neck = computeNeckReferenceFrame(face, pose, imageWidthPx, imageHeightPx, neckFractionOverride);
+  const neck = computeNeckReferenceFrame(
+    face,
+    pose,
+    imageWidthPx,
+    imageHeightPx,
+    neckFractionOverride,
+    neckHorizontalOffsetOverride
+  );
 
   const assetAttachmentPx = assetGeometry.anchorPx;
   const transformedAssetAttachmentPx = transformAssetPoint(transform, assetGeometry.anchorPx);

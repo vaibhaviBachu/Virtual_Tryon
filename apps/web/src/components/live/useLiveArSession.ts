@@ -65,6 +65,10 @@ export interface UseLiveArSessionArgs {
    * without a Docker rebuild per attempt. `null`/`undefined` uses the shipped constant --
    * this DOES affect the actual rendered position while set, unlike debugEnabled. */
   debugNeckFractionOverride?: number | null;
+  /** Same diagnostic-only convention as debugNeckFractionOverride, for the necklace
+   * anchor's horizontal position (a fraction of shoulder width). `null`/`undefined`
+   * means zero offset -- the plain shoulder midpoint, unchanged behavior. */
+  debugNeckHorizontalOffsetOverride?: number | null;
 }
 
 export interface UseLiveArSessionResult {
@@ -99,6 +103,7 @@ export function useLiveArSession({
   necklaceLength = null,
   debugEnabled = false,
   debugNeckFractionOverride = null,
+  debugNeckHorizontalOffsetOverride = null,
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -127,6 +132,8 @@ export function useLiveArSession({
   // calibration slider doesn't tear down and restart tracking/smoothing state each tick.
   const debugNeckFractionOverrideRef = useRef(debugNeckFractionOverride);
   debugNeckFractionOverrideRef.current = debugNeckFractionOverride;
+  const debugNeckHorizontalOffsetOverrideRef = useRef(debugNeckHorizontalOffsetOverride);
+  debugNeckHorizontalOffsetOverrideRef.current = debugNeckHorizontalOffsetOverride;
 
   // Start the camera once per mount.
   useEffect(() => {
@@ -250,7 +257,8 @@ export function useLiveArSession({
           videoWidthPx,
           videoHeightPx,
           necklaceLength,
-          debugNeckFractionOverrideRef.current ?? undefined
+          debugNeckFractionOverrideRef.current ?? undefined,
+          debugNeckHorizontalOffsetOverrideRef.current ?? undefined
         );
         overlays = plans.flatMap((plan, index) => {
           let slot = slotsRef.current.get(plan.slot);
@@ -285,7 +293,8 @@ export function useLiveArSession({
           videoHeightPx,
           loaded.geometry,
           necklaceOverlay?.transform ?? null,
-          debugNeckFractionOverrideRef.current ?? undefined
+          debugNeckFractionOverrideRef.current ?? undefined,
+          debugNeckHorizontalOffsetOverrideRef.current ?? undefined
         );
         if (snapshot) {
           drawNecklaceDebugOverlay(ctx, snapshot);
