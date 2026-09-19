@@ -21,6 +21,18 @@ RUN apt-get update \
 COPY workers/requirements.txt /srv/workers/requirements.txt
 RUN pip install --no-cache-dir -r /srv/workers/requirements.txt
 
+# Pre-fetch rembg's U-2-Net ONNX weights (~176MB) at build time instead of leaving them
+# to download on first use. RembgBackgroundRemover.__init__ (ai/catalogue/background_remover.py)
+# calls rembg.new_session("u2net"), which otherwise downloads this from a GitHub release
+# the moment the catalogue-asset consumer thread starts (workers/tasks/process_jewellery_asset.py) —
+# on a free/ephemeral host that download re-runs on every cold start, blocking that
+# thread (silently: pooch's tqdm progress bar is carriage-return based and produces no
+# visible log lines) for as long as it takes, before the thread ever logs "consumer loop
+# started" or picks up a single job. Baking it into the image means the model is already
+# on disk at container start, so this is a one-time build-time cost instead of a
+# recurring runtime one.
+RUN python -c "from rembg import new_session; new_session('u2net')"
+
 COPY workers /srv/workers
 COPY ai /srv/ai
 COPY db /srv/db
