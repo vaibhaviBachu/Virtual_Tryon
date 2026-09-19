@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { SiteHeader } from "@/components/site-header";
 import { LiveArStudio } from "@/components/live/LiveArStudio";
 
@@ -16,6 +18,13 @@ export default function LiveArTryOnPage() {
           <p className="mb-2 text-sm text-neutral-500">
             Real-time try-on using your camera -- no photo needed. This is a live geometry
             preview, not a photorealistic simulation.
+          </p>
+          <p className="mb-6 text-sm text-neutral-500">
+            No camera, or prefer a still photo?{" "}
+            <Link href="/try-on" className="underline underline-offset-2 hover:text-neutral-900 dark:hover:text-white">
+              Upload a photo and pick jewellery instead
+            </Link>
+            .
           </p>
         </div>
         <LiveArStudio />

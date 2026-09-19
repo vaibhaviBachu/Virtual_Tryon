@@ -55,7 +55,7 @@ export default function LandingPage() {
             down to the last detail.
           </p>
           <div className="mt-10 flex items-center justify-center gap-4">
-            <Link href="/try-on" className={cn(buttonVariants({ size: "lg" }))}>
+            <Link href="/try-on/live" className={cn(buttonVariants({ size: "lg" }))}>
               Start your try-on
             </Link>
             <a
@@ -122,7 +122,7 @@ export default function LandingPage() {
           <p className="mt-3 text-neutral-600 dark:text-neutral-400">
             No account required to get started.
           </p>
-          <Link href="/try-on" className={cn(buttonVariants({ size: "lg" }), "mt-8")}>
+          <Link href="/try-on/live" className={cn(buttonVariants({ size: "lg" }), "mt-8")}>
             Open the Try-On Studio
           </Link>
         </section>

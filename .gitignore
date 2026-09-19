@@ -58,3 +58,10 @@ evaluation/expected/*
 dump.rdb
 .venv/
 .venv-check/
+
+# --- Ad-hoc calibration/debug output (real-camera captures, never committed) ---
+debug_out/
+debug_out2/
+debug_out3/
+debug_out4/
+*.bundle

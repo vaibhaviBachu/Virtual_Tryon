@@ -19,7 +19,7 @@ export function SiteHeader() {
           <Link href="/#how-it-works" className="hidden hover:text-neutral-900 dark:hover:text-white sm:inline">
             How it works
           </Link>
-          <Link href="/try-on" className={buttonVariants({ size: "sm" })}>
+          <Link href="/try-on/live" className={buttonVariants({ size: "sm" })}>
             Try it on
           </Link>
         </nav>
