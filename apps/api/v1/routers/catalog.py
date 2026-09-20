@@ -177,6 +177,24 @@ def archive_jewellery(
     return JewelleryResponse.model_validate(item)
 
 
+@router.delete("/jewellery/{jewellery_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+def delete_jewellery_permanently(
+    jewellery_id: UUID,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Genuinely removes the item (row, assets, and their storage files) — a separate,
+    explicit, deliberately-chosen exception to this catalogue's normal archive-only
+    policy (see jewellery_service.delete_jewellery_permanently's docstring for the
+    real, dangerous side effect: this also deletes any saved try-on captures/renders
+    for this item, via ON DELETE CASCADE). Distinct from the DELETE /jewellery/{id}
+    route above, which only archives (is_active=False) and is the recommended path."""
+    try:
+        jewellery_service.delete_jewellery_permanently(db, jewellery_id)
+    except jewellery_service.JewelleryNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Jewellery not found.")
+
+
 # ---------------------------------------------------------------------------
 # Assets
 # ---------------------------------------------------------------------------

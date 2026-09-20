@@ -1,11 +1,19 @@
-"""Jewellery item business logic. Soft-delete only (is_active flag) — Milestone 2 spec
-§17 explicitly prefers archive semantics over destructive delete for catalogue items."""
+"""Jewellery item business logic. Milestone 2 spec §17 prefers archive semantics
+(is_active flag, see archive_jewellery below) over destructive delete for catalogue
+items, and that remains the default/recommended path. delete_jewellery_permanently
+exists alongside it as an explicit, deliberately-chosen exception for an admin who
+wants a real removal — see that function's own docstring for what it actually does
+and why it's dangerous (jewellery_id has ON DELETE CASCADE from both
+live_ar_captures and tryon_renders — see db/models/live_ar.py and db/models/tryon.py
+— so this silently deletes a customer's saved captures/renders too, not just the
+catalogue entry)."""
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from apps.api.storage.s3_storage import get_object_storage
 from apps.api.v1.schemas.jewellery import JewelleryCreateRequest, JewelleryUpdateRequest
 from apps.api.v1.schemas.pagination import PageParams
 from db.models import Jewellery, JewelleryCategory
@@ -121,13 +129,41 @@ def update_jewellery(db: Session, jewellery_id: UUID, payload: JewelleryUpdateRe
 
 
 def archive_jewellery(db: Session, jewellery_id: UUID) -> Jewellery:
-    """Soft-delete: sets is_active=False. Nothing is ever hard-deleted from the
-    jewellery table via the API — see Milestone 2 spec §17."""
+    """Soft-delete: sets is_active=False. This is the DEFAULT/recommended way to
+    remove an item from the active catalogue — see Milestone 2 spec §17 and
+    delete_jewellery_permanently's docstring for why the alternative is dangerous."""
     item = get_jewellery(db, jewellery_id)
     item.is_active = False
     db.commit()
     db.refresh(item)
     return item
+
+
+def delete_jewellery_permanently(db: Session, jewellery_id: UUID) -> None:
+    """Genuinely removes the jewellery row, its asset rows, and their underlying
+    object-storage files. An explicit exception to this module's normal archive-only
+    policy — call only when an admin has deliberately asked for irreversible removal,
+    never as a default.
+
+    DANGEROUS SIDE EFFECT, not just "deletes the catalogue entry": jewellery_id has
+    ON DELETE CASCADE from both live_ar_captures and tryon_renders (db/models/live_ar.py,
+    db/models/tryon.py) — the database itself will cascade-delete any saved try-on
+    captures/renders that reference this item the moment this row is deleted. There is
+    no way to delete the jewellery without also losing those.
+    """
+    item = get_jewellery(db, jewellery_id)
+    deletable_keys = [a.storage_key for a in item.assets if not a.storage_key.startswith("pending/")]
+    if deletable_keys:
+        # Constructed lazily, only when there's actually something to delete — an item
+        # with no uploaded assets yet (or none past the pending placeholder) never
+        # touches object storage at all.
+        storage = get_object_storage()
+        for key in deletable_keys:
+            storage.delete(key)
+    db.delete(item)  # cascades to JewelleryAsset rows (see the ORM relationship's
+    # cascade="all, delete-orphan" in db/models/jewellery.py) and, at the database
+    # level, to live_ar_captures/tryon_renders rows referencing this item.
+    db.commit()
 
 
 def list_jewellery(

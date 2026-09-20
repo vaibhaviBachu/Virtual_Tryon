@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { listCategories, listJewellery } from "@/lib/catalogue-api";
+import { deleteJewelleryPermanently, listCategories, listJewellery } from "@/lib/catalogue-api";
+import { useAdminAuthStore } from "@/store/admin-auth-store";
 
 const PAGE_SIZE = 10;
 
@@ -15,8 +17,26 @@ export function JewelleryList() {
   const [categoryId, setCategoryId] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [page, setPage] = useState(1);
+  const [deleteErrorId, setDeleteErrorId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  const token = useAdminAuthStore((s) => s.token);
+  const queryClient = useQueryClient();
   const categoriesQuery = useQuery({ queryKey: ["categories", "all"], queryFn: () => listCategories() });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteJewelleryPermanently(id, token!),
+    onSuccess: () => {
+      setDeleteErrorId(null);
+      // Broad (partial-key) invalidation -- matches every filter/page variation of
+      // this list's own query key, not just whatever's currently on screen.
+      queryClient.invalidateQueries({ queryKey: ["jewellery"] });
+    },
+    onError: (err, id) => {
+      setDeleteErrorId(id);
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete this item.");
+    },
+  });
 
   const jewelleryQuery = useQuery({
     queryKey: ["jewellery", { search, categoryId, statusFilter, page }],
@@ -97,6 +117,7 @@ export function JewelleryList() {
                   <th className="py-2 pr-4">SKU</th>
                   <th className="py-2 pr-4">Dimensions (mm)</th>
                   <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -114,6 +135,37 @@ export function JewelleryList() {
                     </td>
                     <td className="py-2 pr-4">
                       <Badge>{item.is_active ? "active" : "inactive"}</Badge>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={deleteMutation.isPending && deleteMutation.variables === item.id}
+                        onClick={() => {
+                          // Permanent -- also deletes this item's assets (storage files
+                          // included) and any saved try-on captures/renders that
+                          // reference it, via the database's own cascade. Not the same
+                          // as Archive (reversible, on the item's own detail page).
+                          if (
+                            !window.confirm(
+                              `Permanently delete "${item.name}"? This removes its photos and any saved try-ons using it, and can't be undone.`
+                            )
+                          ) {
+                            return;
+                          }
+                          setDeleteErrorId(null);
+                          deleteMutation.mutate(item.id);
+                        }}
+                        className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                      >
+                        {deleteMutation.isPending && deleteMutation.variables === item.id ? "Deleting…" : "Delete"}
+                      </Button>
+                      {deleteErrorId === item.id && deleteError && (
+                        <p role="alert" className="mt-1 max-w-[10rem] text-[10px] text-red-600 dark:text-red-400">
+                          {deleteError}
+                        </p>
+                      )}
                     </td>
                   </tr>
                 ))}

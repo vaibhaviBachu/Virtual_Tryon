@@ -147,6 +147,44 @@ def test_archive_jewellery_is_soft_delete(admin_client, client, db_session, earr
         _cleanup_jewellery(db_session, item_id)
 
 
+def test_delete_jewellery_permanently_requires_admin(customer_client, db_session, earrings_category_id, unique_suffix):
+    # Created directly via the ORM, not admin_client -- admin_client and
+    # customer_client both override the same app-level get_current_user dependency,
+    # so using both in one test would make whichever fixture set up LAST win for every
+    # request regardless of which client object actually made it. Every other
+    # requires-admin test in this suite avoids that for the same reason.
+    item = Jewellery(category_id=earrings_category_id, name="Guarded", slug=f"guarded-{unique_suffix}", sku=f"SKU-{unique_suffix}")
+    db_session.add(item)
+    db_session.commit()
+    item_id = str(item.id)
+    try:
+        response = customer_client.delete(f"/api/v1/catalog/jewellery/{item_id}/permanent")
+        assert response.status_code == 403
+    finally:
+        _cleanup_jewellery(db_session, item_id)
+
+
+def test_delete_jewellery_permanently_removes_the_row(admin_client, client, db_session, earrings_category_id, unique_suffix):
+    created = admin_client.post(
+        "/api/v1/catalog/jewellery",
+        json={"category_id": earrings_category_id, "name": "Delete Me", "slug": f"delete-me-{unique_suffix}", "sku": f"SKU-{unique_suffix}"},
+    )
+    item_id = created.json()["id"]
+
+    response = admin_client.delete(f"/api/v1/catalog/jewellery/{item_id}/permanent")
+    assert response.status_code == 204
+
+    # Actually gone (hard delete), not just archived -- confirms directly against the
+    # database, distinct from test_archive_jewellery_is_soft_delete above.
+    assert db_session.get(Jewellery, item_id) is None
+    assert client.get(f"/api/v1/catalog/jewellery/{item_id}").status_code == 404
+
+
+def test_delete_unknown_jewellery_permanently_returns_404(admin_client):
+    response = admin_client.delete("/api/v1/catalog/jewellery/00000000-0000-0000-0000-000000000000/permanent")
+    assert response.status_code == 404
+
+
 def test_list_jewellery_pagination_and_filtering(admin_client, db_session, earrings_category_id, unique_suffix):
     created_ids = []
     try:

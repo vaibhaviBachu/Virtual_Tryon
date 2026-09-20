@@ -121,6 +121,14 @@ export async function archiveJewellery(id: string, token: string): Promise<Jewel
   return request(`/api/v1/catalog/jewellery/${id}`, { method: "DELETE", token });
 }
 
+// Genuinely removes the item (row, assets, and their storage files) -- distinct from
+// archiveJewellery above, which only sets is_active=false and is reversible. See
+// apps/api/v1/services/jewellery_service.py's delete_jewellery_permanently docstring:
+// this also deletes any saved try-on captures/renders for this item.
+export async function deleteJewelleryPermanently(id: string, token: string): Promise<void> {
+  return request(`/api/v1/catalog/jewellery/${id}/permanent`, { method: "DELETE", token });
+}
+
 // --- Assets ---
 
 export async function listAssets(jewelleryId: string): Promise<AssetResponse[]> {

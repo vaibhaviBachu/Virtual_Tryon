@@ -8,8 +8,12 @@ import * as catalogueApi from "@/lib/catalogue-api";
 
 vi.mock("@/lib/catalogue-api", async () => {
   const actual = await vi.importActual<typeof catalogueApi>("@/lib/catalogue-api");
-  return { ...actual, listCategories: vi.fn(), listJewellery: vi.fn() };
+  return { ...actual, listCategories: vi.fn(), listJewellery: vi.fn(), deleteJewelleryPermanently: vi.fn() };
 });
+
+vi.mock("@/store/admin-auth-store", () => ({
+  useAdminAuthStore: (selector: (state: { token: string | null }) => unknown) => selector({ token: "test-token" }),
+}));
 
 const SAMPLE_CATEGORY = {
   id: "cat-1",
@@ -97,5 +101,53 @@ describe("JewelleryList", () => {
 
     render(<JewelleryList />, { wrapper: TestQueryProvider });
     expect(await screen.findByRole("alert")).toHaveTextContent(/could not load jewellery/i);
+  });
+
+  it("deletes an item permanently only after the user confirms, then refetches the list", async () => {
+    vi.mocked(catalogueApi.listCategories).mockResolvedValue([SAMPLE_CATEGORY]);
+    vi.mocked(catalogueApi.listJewellery).mockResolvedValue({
+      items: [SAMPLE_ITEM],
+      total: 1,
+      page: 1,
+      page_size: 10,
+    });
+    vi.mocked(catalogueApi.deleteJewelleryPermanently).mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const user = userEvent.setup();
+    render(<JewelleryList />, { wrapper: TestQueryProvider });
+    await screen.findByText("Gold Hoops");
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Gold Hoops"));
+    await waitFor(() => expect(catalogueApi.deleteJewelleryPermanently).toHaveBeenCalledWith("item-1", "test-token"));
+    // A real refetch, not just an optimistic local removal -- listJewellery gets
+    // called again after the mutation succeeds.
+    await waitFor(() => expect(catalogueApi.listJewellery).toHaveBeenCalledTimes(2));
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not delete when the user cancels the confirm dialog", async () => {
+    vi.mocked(catalogueApi.listCategories).mockResolvedValue([SAMPLE_CATEGORY]);
+    vi.mocked(catalogueApi.listJewellery).mockResolvedValue({
+      items: [SAMPLE_ITEM],
+      total: 1,
+      page: 1,
+      page_size: 10,
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    const user = userEvent.setup();
+    render(<JewelleryList />, { wrapper: TestQueryProvider });
+    await screen.findByText("Gold Hoops");
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(catalogueApi.deleteJewelleryPermanently).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
   });
 });
