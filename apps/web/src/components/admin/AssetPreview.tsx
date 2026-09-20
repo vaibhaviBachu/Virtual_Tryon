@@ -1,10 +1,13 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
-import { getAsset } from "@/lib/catalogue-api";
+import { Button } from "@/components/ui/button";
+import { deleteAsset, getAsset } from "@/lib/catalogue-api";
 import type { AssetResponse, AssetWithPreviewResponse } from "@/lib/catalogue-types";
+import { useAdminAuthStore } from "@/store/admin-auth-store";
 
 const CHECKERBOARD_STYLE: React.CSSProperties = {
   backgroundImage:
@@ -21,6 +24,10 @@ const CHECKERBOARD_STYLE: React.CSSProperties = {
  * on a plain white card background would be indistinguishable from an opaque white one.
  */
 export function AssetPreview({ asset }: { asset: AssetResponse }) {
+  const token = useAdminAuthStore((s) => s.token);
+  const queryClient = useQueryClient();
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const assetQuery = useQuery<AssetWithPreviewResponse>({
     queryKey: ["asset", asset.id],
     queryFn: () => getAsset(asset.id),
@@ -28,6 +35,19 @@ export function AssetPreview({ asset }: { asset: AssetResponse }) {
     refetchInterval: (query) => {
       const status = query.state.data?.processing_status;
       return status === "pending" || status === "processing" ? 2000 : false;
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteAsset(asset.id, token!),
+    onSuccess: () => {
+      // Permanently removed (storage object + database row) -- refetch this item's
+      // asset list so it disappears from the grid, same invalidation key
+      // AssetUploader uses after a successful upload.
+      queryClient.invalidateQueries({ queryKey: ["assets", asset.jewellery_id] });
+    },
+    onError: (err) => {
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete this asset.");
     },
   });
 
@@ -58,6 +78,28 @@ export function AssetPreview({ asset }: { asset: AssetResponse }) {
       {current.processing_status === "failed" && current.processing_error && (
         <p role="alert" className="max-w-[8rem] text-center text-[10px] text-red-600 dark:text-red-400">
           {current.processing_error}
+        </p>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={deleteMutation.isPending}
+        onClick={() => {
+          // Permanent (storage object + database row are both removed, per
+          // asset_service.delete_asset) -- confirm before doing something irreversible,
+          // unlike Archive above which just flips is_active and can be undone.
+          if (!window.confirm(`Delete this ${asset.asset_type} photo? This can't be undone.`)) return;
+          setDeleteError(null);
+          deleteMutation.mutate();
+        }}
+        className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+      >
+        {deleteMutation.isPending ? "Deleting…" : "Delete"}
+      </Button>
+      {deleteError && (
+        <p role="alert" className="max-w-[8rem] text-center text-[10px] text-red-600 dark:text-red-400">
+          {deleteError}
         </p>
       )}
     </div>
