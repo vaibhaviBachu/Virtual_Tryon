@@ -10,7 +10,7 @@ import io
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ai.catalogue.background_remover import BackgroundRemovalResult, get_remover
+from ai.catalogue.background_remover import BackgroundRemovalResult, _cutout_against_white_background, get_remover
 
 
 def test_get_remover_returns_the_same_cached_instance():
@@ -71,6 +71,50 @@ def test_remove_background_extracts_a_thin_ring_not_its_enclosed_background():
     # opaque the way the plain saliency model got this wrong.
     hole_point = arr[200, 200]  # center of the ring, inside the hole
     assert hole_point[3] < 50, f"expected the ring's enclosed hole transparent, got alpha={hole_point[3]}"
+
+
+def test_white_background_cutout_survives_jpeg_style_channel_noise():
+    """Regression test for a real bug found against an actual catalogue upload: the
+    background classifier originally used normalized HSL saturation, whose formula
+    divides by (1 - |2*lightness-1|) -- a value that -> 0 as lightness approaches 1
+    (pure white). A near-white pixel with only a whisper of RGB channel imbalance
+    (e.g. 253/253/255, the kind of noise ordinary JPEG compression introduces
+    constantly) got its "saturation" inflated to ~1.0 by that near-zero denominator,
+    i.e. it read as maximally colorful -- so large stretches of a genuinely white
+    background were wrongly classified as foreground and kept opaque. Confirmed
+    directly against a real photo, not assumed. This test reproduces it synthetically:
+    a solid gold square on a white background where the white has small per-pixel
+    channel noise, and checks the background is still cut away, not kept opaque."""
+    import random
+
+    random.seed(0)
+    img = Image.new("RGB", (200, 200), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((60, 60, 140, 140), fill=(212, 175, 55))
+    # Perturb every "white" pixel by a tiny, JPEG-noise-sized amount so it's no longer
+    # exactly (255,255,255) but still visually/perceptually white.
+    pixels = img.load()
+    for y in range(200):
+        for x in range(200):
+            r, g, b = pixels[x, y]
+            if (r, g, b) == (255, 255, 255):
+                pixels[x, y] = (r - random.randint(0, 4), g - random.randint(0, 4), b)
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=95)
+
+    result = _cutout_against_white_background(buffer.getvalue())
+    assert result is not None, "expected this to be recognized as a white-background photo"
+    rgba_bytes, foreground_fraction = result
+
+    # The gold square is 80x80 = 6400px of a 200x200 = 40000px image = 16%. A
+    # correct cutout lands close to that; the bug inflated it towards ~60%+ because
+    # the noisy "white" background was wrongly kept as foreground too.
+    assert foreground_fraction < 0.30, f"expected ~16% foreground, got {foreground_fraction:.2f} (background wrongly kept opaque?)"
+
+    output_image = Image.open(io.BytesIO(rgba_bytes)).convert("RGBA")
+    arr = np.array(output_image)
+    corner_alpha = arr[5, 5, 3]
+    assert corner_alpha < 50, f"expected the noisy-white corner transparent, got alpha={corner_alpha}"
 
 
 def test_remove_background_never_raises_on_bad_input():

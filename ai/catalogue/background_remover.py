@@ -49,7 +49,16 @@ logger = logging.getLogger("ai.catalogue.background_remover")
 # trusted; RembgBackgroundRemover falls through to the general rembg model otherwise,
 # so this never replaces rembg for a genuinely different (colored/patterned) background.
 WHITE_BG_LIGHTNESS_THRESHOLD = 0.80
-WHITE_BG_SATURATION_THRESHOLD = 0.25
+# Raw chroma (max channel - min channel), NOT normalized HSL saturation. HSL
+# saturation divides by (1 - |2L-1|), which -> 0 as lightness approaches 1 (or 0) --
+# for a genuinely near-white pixel with only a whisper of JPEG-compression color noise
+# (e.g. RGB 0.992/0.992/1.000, chroma 0.008), that near-zero denominator inflates
+# "saturation" to ~1.0, i.e. it reads as maximally colorful. Confirmed as the actual
+# root cause of a real bug: a real catalogue photo's near-white background pixels were
+# wrongly kept opaque (classified as foreground) throughout its interior, not just at
+# the edges, and normalized saturation was the reason why -- raw chroma has no such
+# instability, so it's used instead.
+WHITE_BG_CHROMA_THRESHOLD = 0.12
 # This method is only attempted when near-white pixels already cover a large share of
 # the whole image -- real near-white-background catalogue photos measured at 41-57%;
 # a colored/patterned-background photo would measure far lower.
@@ -81,11 +90,9 @@ def _cutout_against_white_background(image_bytes: bytes) -> tuple[bytes, float] 
     maxc = arr.max(axis=-1)
     minc = arr.min(axis=-1)
     lightness = (maxc + minc) / 2
-    # HSL saturation formula; the +1e-6 avoids a 0/0 on fully achromatic (pure
-    # black/white/gray) pixels, which should read as saturation 0 anyway.
-    saturation = np.where(maxc == minc, 0, (maxc - minc) / (1 - np.abs(2 * lightness - 1) + 1e-6))
+    chroma = maxc - minc
 
-    is_background = (lightness > WHITE_BG_LIGHTNESS_THRESHOLD) & (saturation < WHITE_BG_SATURATION_THRESHOLD)
+    is_background = (lightness > WHITE_BG_LIGHTNESS_THRESHOLD) & (chroma < WHITE_BG_CHROMA_THRESHOLD)
     if is_background.mean() < WHITE_BG_MIN_BACKGROUND_FRACTION:
         return None
     foreground = ~is_background
