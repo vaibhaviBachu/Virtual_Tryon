@@ -20,8 +20,8 @@ const CATEGORIES = [
 
 const STEPS = [
   {
-    title: "Capture",
-    description: "Take a photo with your camera or upload an existing one.",
+    title: "Go live",
+    description: "Open your camera — no photo needed, nothing to upload.",
   },
   {
     title: "Browse",
@@ -29,11 +29,11 @@ const STEPS = [
   },
   {
     title: "Try it on",
-    description: "See the actual piece placed on your photo — not an approximation.",
+    description: "See the actual piece on you in real time, live on camera.",
   },
   {
-    title: "Compare",
-    description: "View your original photo side-by-side with the result.",
+    title: "See how you look",
+    description: "Move, turn, check every angle — it follows you live.",
   },
 ] as const;
 
