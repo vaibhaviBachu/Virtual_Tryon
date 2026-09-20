@@ -83,10 +83,6 @@ export default function LandingPage() {
               />
             ))}
           </div>
-          <p className="mt-4 text-center text-xs text-neutral-400">
-            Catalogue browsing ships in Milestone 2 — categories shown here are
-            illustrative.
-          </p>
         </section>
 
         {/* How it works */}
@@ -126,10 +122,6 @@ export default function LandingPage() {
           </Link>
         </section>
       </main>
-
-      <footer className="border-t border-neutral-200 py-8 text-center text-xs text-neutral-400 dark:border-neutral-800">
-        Lumière Virtual Try-On — platform foundation (Milestone 1)
-      </footer>
     </div>
   );
 }
