@@ -105,3 +105,10 @@ export const TRACKING_LOST_FADE_MS = 250;
 // whether tracking runs at 30fps or is throttled lower (spec §24).
 // alpha = 1 keeps 100% of the new sample (no smoothing); smaller = smoother/laggier.
 export const DEFAULT_SMOOTHING_TIME_CONSTANT_MS = 120;
+
+// Multi-item necklace layering (e.g. wearing a necklace and a haaram at once): each
+// additional selected neck item is nudged this many shoulder-widths further down than
+// the previous one, so simultaneously worn items land at visibly different depths
+// instead of rendering on top of each other. UNCALIBRATED placeholder, same status as
+// NECKLACE_LENGTH_OFFSET_MULTIPLIER above -- tune against a real camera if it looks off.
+export const NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH = 0.16;

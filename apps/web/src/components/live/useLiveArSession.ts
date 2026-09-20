@@ -8,6 +8,7 @@ import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
 import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { planCategoryRenders } from "@/lib/live-ar/geometry";
+import { NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH } from "@/lib/live-ar/constants";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
 import { drawJewelleryOverlay, drawNecklaceDebugOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
@@ -55,6 +56,14 @@ export interface UseLiveArSessionArgs {
   jewelleryId: string | null;
   asset: AssetWithPreviewResponse | null;
   necklaceLength?: string | null;
+  /** Necklace-mode-only: further neck items worn AT THE SAME TIME as `asset` above
+   * (e.g. a haaram layered under a necklace) -- see LiveArStudio's multi-select
+   * "Choose pieces to layer" panel. Each is rendered with its own independent
+   * tracking/smoothing state, progressively nudged further down the neck than the
+   * previous one (constants.ts's NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH) so
+   * simultaneously worn items land at visibly different depths. Empty/omitted outside
+   * necklace mode -- unchanged single-item behavior. */
+  additionalNecklaceItems?: { jewelleryId: string; asset: AssetWithPreviewResponse | null }[];
   /** Draws the necklace geometry debug overlay (face/shoulder/neck/jewellery attachment
    * points) and exposes the raw numeric snapshot via `debugSnapshot`. Diagnostic-only --
    * never affects the actual jewellery placement/rendering. */
@@ -101,6 +110,7 @@ export function useLiveArSession({
   jewelleryId,
   asset,
   necklaceLength = null,
+  additionalNecklaceItems = [],
   debugEnabled = false,
   debugNeckFractionOverride = null,
   debugNeckHorizontalOffsetOverride = null,
@@ -110,6 +120,10 @@ export function useLiveArSession({
   const streamRef = useRef<MediaStream | null>(null);
   const trackersRef = useRef<LiveTrackers | null>(null);
   const assetGeometryRef = useRef<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null>(null);
+  // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
+  // fresh every frame inside the render loop (never restarts it), updated by the
+  // separate effect below whenever the selected set/preview URLs actually change.
+  const additionalGeometryRef = useRef<Map<string, { image: HTMLImageElement; geometry: JewelleryAssetGeometry }>>(new Map());
   const slotsRef = useRef<Map<string, SlotState>>(new Map());
   const performanceTrackerRef = useRef(new PerformanceTracker());
   const rafRef = useRef<number | null>(null);
@@ -134,6 +148,12 @@ export function useLiveArSession({
   debugNeckFractionOverrideRef.current = debugNeckFractionOverride;
   const debugNeckHorizontalOffsetOverrideRef = useRef(debugNeckHorizontalOffsetOverride);
   debugNeckHorizontalOffsetOverrideRef.current = debugNeckHorizontalOffsetOverride;
+  // Read fresh every frame, same rationale as the debug override refs above -- the
+  // render loop effect below does not restart when this list changes (only textures,
+  // loaded separately into additionalGeometryRef, need to be current; the ORDER here
+  // determines each item's layering depth).
+  const additionalNecklaceItemsRef = useRef(additionalNecklaceItems);
+  additionalNecklaceItemsRef.current = additionalNecklaceItems;
 
   // Start the camera once per mount.
   useEffect(() => {
@@ -213,6 +233,37 @@ export function useLiveArSession({
     };
   }, [asset]);
 
+  // Same texture-loading pattern as the primary asset above, for each additionally
+  // layered item. Keyed on a stable string derived from (id, preview_url) pairs rather
+  // than the array itself, since the caller passes a freshly-built array every render.
+  const additionalItemsKey = additionalNecklaceItems.map((item) => `${item.jewelleryId}:${item.asset?.preview_url ?? ""}`).join("|");
+  useEffect(() => {
+    let cancelled = false;
+    const nextIds = new Set(additionalNecklaceItems.map((item) => item.jewelleryId));
+    // Drop textures for items no longer selected.
+    for (const id of additionalGeometryRef.current.keys()) {
+      if (!nextIds.has(id)) additionalGeometryRef.current.delete(id);
+    }
+    for (const item of additionalNecklaceItems) {
+      if (!item.asset || !item.asset.preview_url) continue;
+      if (additionalGeometryRef.current.has(item.jewelleryId)) continue;
+      loadJewelleryAssetTexture(item.asset, item.asset.preview_url)
+        .then((loaded) => {
+          if (cancelled) return;
+          additionalGeometryRef.current.set(item.jewelleryId, loaded);
+        })
+        .catch(() => {
+          // Best-effort: an additional layered item that fails to load simply doesn't
+          // render (the primary item and any other successfully-loaded items still
+          // do) -- never breaks the whole session over one extra item.
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [additionalItemsKey]);
+
   // Category changes reset per-slot tracking/smoothing state -- a left-earring's held
   // transform must never leak into a necklace's slot after switching categories.
   useEffect(() => {
@@ -271,6 +322,41 @@ export function useLiveArSession({
           if (index === 0) primaryStatus = result.status;
           if (result.transform === null || result.opacity <= 0) return [];
           return [{ image: loaded.image, transform: result.transform, opacity: result.opacity }];
+        });
+      }
+
+      // Additional layered neck items (e.g. a haaram worn under a necklace) -- each
+      // gets its own independent tracking/smoothing slot (keyed by jewelleryId, never
+      // the primary's fixed "necklace" slot) and a progressively larger vertical nudge
+      // so simultaneously worn items land at visibly different depths instead of
+      // rendering on top of each other.
+      if (category === "necklace") {
+        additionalNecklaceItemsRef.current.forEach((item, additionalIndex) => {
+          const additionalLoaded = additionalGeometryRef.current.get(item.jewelleryId);
+          if (!additionalLoaded) return;
+          const plans = planCategoryRenders(
+            "necklace",
+            additionalLoaded.geometry,
+            face,
+            pose,
+            videoWidthPx,
+            videoHeightPx,
+            necklaceLength,
+            debugNeckFractionOverrideRef.current ?? undefined,
+            debugNeckHorizontalOffsetOverrideRef.current ?? undefined,
+            (additionalIndex + 1) * NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH
+          );
+          const slotKey = `necklace:${item.jewelleryId}`;
+          let slot = slotsRef.current.get(slotKey);
+          if (!slot) {
+            slot = makeSlotState();
+            slotsRef.current.set(slotKey, slot);
+          }
+          const plan = plans[0];
+          const smoothed = plan?.transform ? smoothTransform(slot.smoother, plan.transform, dtMs) : null;
+          const result = slot.trackingMachine.update(frameStartMs, smoothed);
+          if (result.transform === null || result.opacity <= 0) return;
+          overlays.push({ image: additionalLoaded.image, transform: result.transform, opacity: result.opacity });
         });
       }
       const t2 = performance.now();

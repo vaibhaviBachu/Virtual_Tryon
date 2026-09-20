@@ -47,13 +47,20 @@ export function computeNeckReferenceFrame(
   // real render path) means zero offset (the plain shoulder midpoint, unchanged
   // behavior). See LiveArStudio's "Horizontal offset" slider and
   // neck-horizontal-offset-override.ts.
-  horizontalOffsetFraction?: number
+  horizontalOffsetFraction?: number,
+  // Additional vertical nudge, as a fraction of shoulder width, added on top of the
+  // fraction-interpolated position above. Used to layer multiple neck items worn at
+  // once (e.g. a necklace and a haaram simultaneously) at visibly different depths --
+  // see useLiveArSession's necklaceItems handling. Zero for every single-item render
+  // path (the default).
+  verticalOffsetFraction?: number
 ): NeckReferenceFrame | null {
   const body = computeBodyReferenceFrame(pose, imageWidthPx, imageHeightPx);
   if (body === null) return null; // no shoulders visible at all -- nothing to anchor to
 
   const fraction = fractionOverride ?? NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH;
   const horizontalOffsetPx = (horizontalOffsetFraction ?? 0) * body.shoulderWidthPx;
+  const verticalOffsetPx = (verticalOffsetFraction ?? 0) * body.shoulderWidthPx;
   const bbox = face?.faceBoundingBox ?? null;
   if (face !== null && bbox !== null && face.detectionConfidence >= FACE_CONFIDENCE_THRESHOLD) {
     const chinProxyYPx = bbox.yMax * imageHeightPx; // bottom of the face oval, approximates the chin
@@ -66,7 +73,7 @@ export function computeNeckReferenceFrame(
     if (neckLengthPx > 0) {
       const attachmentPx: PixelPoint = {
         x: body.shoulderMidpointPx.x + horizontalOffsetPx,
-        y: chinProxyYPx + fraction * neckLengthPx,
+        y: chinProxyYPx + fraction * neckLengthPx + verticalOffsetPx,
       };
       return {
         attachmentPx,
@@ -90,7 +97,7 @@ export function computeNeckReferenceFrame(
   return {
     attachmentPx: {
       x: body.shoulderMidpointPx.x + dx * offsetPx + horizontalOffsetPx,
-      y: body.shoulderMidpointPx.y + dy * offsetPx,
+      y: body.shoulderMidpointPx.y + dy * offsetPx + verticalOffsetPx,
     },
     centerPx: body.shoulderMidpointPx,
     widthPx: null,

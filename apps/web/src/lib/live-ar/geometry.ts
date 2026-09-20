@@ -154,7 +154,10 @@ function computeNecklaceAnchor(
   imageHeightPx: number,
   necklaceLength: string | null,
   neckFractionOverride?: number,
-  neckHorizontalOffsetOverride?: number
+  neckHorizontalOffsetOverride?: number,
+  // Additional vertical nudge (fraction of shoulder width) for layering multiple neck
+  // items at once -- see neck-reference.ts's computeNeckReferenceFrame docstring.
+  neckVerticalLayerOffset?: number
 ): AnchorResult {
   const neck = computeNeckReferenceFrame(
     face,
@@ -162,7 +165,8 @@ function computeNecklaceAnchor(
     imageWidthPx,
     imageHeightPx,
     neckFractionOverride,
-    neckHorizontalOffsetOverride
+    neckHorizontalOffsetOverride,
+    neckVerticalLayerOffset
   );
   if (neck === null) {
     return { success: false, anchorPx: null, referenceMeasurementPx: null, method: "none", errorCode: "NECK_NOT_VISIBLE" };
@@ -189,7 +193,8 @@ export function computeAnchor(
   imageHeightPx: number,
   necklaceLength: string | null = null,
   neckFractionOverride?: number,
-  neckHorizontalOffsetOverride?: number
+  neckHorizontalOffsetOverride?: number,
+  neckVerticalLayerOffset?: number
 ): AnchorResult {
   if (category === "earrings") return computeEarAnchor(side, face, imageWidthPx, imageHeightPx);
   if (category === "necklace")
@@ -200,7 +205,8 @@ export function computeAnchor(
       imageHeightPx,
       necklaceLength,
       neckFractionOverride,
-      neckHorizontalOffsetOverride
+      neckHorizontalOffsetOverride,
+      neckVerticalLayerOffset
     );
   return { success: false, anchorPx: null, referenceMeasurementPx: null, method: "none", errorCode: "UNSUPPORTED_CATEGORY" };
 }
@@ -362,7 +368,11 @@ export function planCategoryRenders(
   // Diagnostic-only calibration overrides -- see computeNeckReferenceFrame's docstring.
   // Always undefined outside the debug slider; every real render uses the shipped constant.
   neckFractionOverride?: number,
-  neckHorizontalOffsetOverride?: number
+  neckHorizontalOffsetOverride?: number,
+  // Layers multiple neck items (e.g. a necklace and a haaram worn together) at
+  // visibly different depths -- see useLiveArSession's necklaceItems handling. Zero
+  // (the default) for a single item, unchanged behavior.
+  neckVerticalLayerOffset?: number
 ): CategoryRenderPlan[] {
   if (category === "necklace") {
     const anchor = computeAnchor(
@@ -374,7 +384,8 @@ export function planCategoryRenders(
       imageHeightPx,
       necklaceLength,
       neckFractionOverride,
-      neckHorizontalOffsetOverride
+      neckHorizontalOffsetOverride,
+      neckVerticalLayerOffset
     );
     const scale = computeScale("necklace", assetGeometry, anchor);
     const rotation = computeRotation("necklace", null, pose, imageWidthPx, imageHeightPx);

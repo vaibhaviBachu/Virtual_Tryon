@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -47,9 +47,19 @@ const TRACKING_STATUS_LABEL: Record<string, string> = {
  * side, lightweight contextual guidance, no dev-tool chrome by default (the performance
  * overlay is opt-in via a small toggle, not shown up front).
  */
+// A person can layer at most this many neck items (e.g. a necklace + a haaram) at
+// once. Purely a sanity cap on the UI/rendering, not a backend limit.
+const MAX_SIMULTANEOUS_NECK_ITEMS = 3;
+
 export function LiveArStudio() {
   const [category, setCategory] = useState<CategorySlug>("earrings");
   const [selectedJewelleryId, setSelectedJewelleryId] = useState<string | null>(null);
+  // Necklace mode supports wearing multiple neck items at once (e.g. a short necklace
+  // together with a long haaram) -- see docs/live-ar-architecture.md. Earrings mode
+  // stays single-select via selectedJewelleryId above; this is necklace-only. Ordered:
+  // the first entry is the "primary" item (reuses the existing single-asset plumbing
+  // below), everything after it is layered further down the neck.
+  const [selectedNecklaceIds, setSelectedNecklaceIds] = useState<string[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showPerfOverlay, setShowPerfOverlay] = useState(false);
   // Necklace geometry debug mode (temporary diagnostic tooling -- see debug.ts):
@@ -94,26 +104,69 @@ export function LiveArStudio() {
     () => categoriesQuery.data?.find((c) => c.slug === category)?.id ?? null,
     [categoriesQuery.data, category]
   );
+  // Haaram (a long traditional necklace) is a separate catalogue category from
+  // "necklace", but shares the same neck anchor -- necklace mode's picker offers both
+  // together so a short necklace and a long haaram can be worn at the same time.
+  const haaramCategoryId = useMemo(
+    () => categoriesQuery.data?.find((c) => c.slug === "haaram")?.id ?? null,
+    [categoriesQuery.data]
+  );
 
   const jewelleryQuery = useQuery({
     queryKey: ["live-ar-jewellery", activeCategoryId],
     queryFn: () => listJewellery({ categoryId: activeCategoryId ?? undefined, page: 1, pageSize: 24 }),
     enabled: activeCategoryId !== null,
   });
+  const haaramItemsQuery = useQuery({
+    queryKey: ["live-ar-jewellery", haaramCategoryId],
+    queryFn: () => listJewellery({ categoryId: haaramCategoryId ?? undefined, page: 1, pageSize: 24 }),
+    enabled: category === "necklace" && haaramCategoryId !== null,
+  });
+  // Necklace mode's full pickable list: plain necklace items plus haaram items,
+  // combined -- see selectedNecklaceIds above.
+  const neckItems = useMemo(
+    () => (category === "necklace" ? [...(jewelleryQuery.data?.items ?? []), ...(haaramItemsQuery.data?.items ?? [])] : []),
+    [category, jewelleryQuery.data, haaramItemsQuery.data]
+  );
 
   // Switching jewellery never restarts the camera or reloads the page (spec §12/§20):
-  // this just changes which cached texture the render loop reads.
+  // this just changes which cached texture the render loop reads. Earrings stays
+  // single-select, auto-picking the first item whenever the current selection isn't
+  // (or is no longer) in the list.
   useEffect(() => {
+    if (category !== "earrings") return;
     const items = jewelleryQuery.data?.items;
     if (items && items.length > 0 && !items.some((item) => item.id === selectedJewelleryId)) {
       setSelectedJewelleryId(items[0].id);
     }
-  }, [jewelleryQuery.data, selectedJewelleryId]);
+  }, [category, jewelleryQuery.data, selectedJewelleryId]);
+
+  // Necklace mode only auto-picks a first item when nothing is selected yet -- unlike
+  // earrings, it must never clobber a deliberate multi-selection when the list refetches.
+  useEffect(() => {
+    if (category !== "necklace" || selectedNecklaceIds.length > 0 || neckItems.length === 0) return;
+    setSelectedNecklaceIds([neckItems[0].id]);
+  }, [category, neckItems, selectedNecklaceIds.length]);
+
+  function toggleNecklaceItem(id: string) {
+    setSelectedNecklaceIds((prev) => {
+      if (prev.includes(id)) return prev.filter((existing) => existing !== id);
+      if (prev.length >= MAX_SIMULTANEOUS_NECK_ITEMS) return prev;
+      return [...prev, id];
+    });
+  }
+
+  // The "primary" selected item (earrings' single selection, or necklace mode's first
+  // pick) keeps using the original single-asset plumbing below -- everything after it
+  // in selectedNecklaceIds is "additional", loaded and rendered separately (see
+  // useLiveArSession's necklaceItems handling).
+  const primaryId = category === "necklace" ? selectedNecklaceIds[0] ?? null : selectedJewelleryId;
+  const additionalNeckIds = category === "necklace" ? selectedNecklaceIds.slice(1) : [];
 
   const assetsQuery = useQuery({
-    queryKey: ["live-ar-assets", selectedJewelleryId],
-    queryFn: () => listAssets(selectedJewelleryId!),
-    enabled: selectedJewelleryId !== null,
+    queryKey: ["live-ar-assets", primaryId],
+    queryFn: () => listAssets(primaryId!),
+    enabled: primaryId !== null,
   });
   const processedAssetSummary = assetsQuery.data?.find((a) => a.asset_type === "processed" && a.processing_status === "ready");
 
@@ -123,10 +176,38 @@ export function LiveArStudio() {
     enabled: !!processedAssetSummary,
   });
 
+  // Same two-step (list assets -> fetch the ready "processed" one) resolution as the
+  // primary item above, but for each additional layered item -- useQueries (rather
+  // than calling useQuery in a loop, which the rules of hooks forbid) is React Query's
+  // own supported pattern for a dynamically-sized list of queries.
+  const additionalAssetsListQueries = useQueries({
+    queries: additionalNeckIds.map((id) => ({
+      queryKey: ["live-ar-assets", id],
+      queryFn: () => listAssets(id),
+    })),
+  });
+  const additionalAssetQueries = useQueries({
+    queries: additionalNeckIds.map((id, index) => {
+      const processedId = additionalAssetsListQueries[index]?.data?.find(
+        (a) => a.asset_type === "processed" && a.processing_status === "ready"
+      )?.id;
+      return {
+        queryKey: ["live-ar-asset-preview", processedId ?? null],
+        queryFn: () => getAsset(processedId!),
+        enabled: processedId !== undefined,
+      };
+    }),
+  });
+  const additionalNecklaceItems = additionalNeckIds.map((id, index) => ({
+    jewelleryId: id,
+    asset: additionalAssetQueries[index]?.data ?? null,
+  }));
+
   const session = useLiveArSession({
     category,
-    jewelleryId: selectedJewelleryId,
+    jewelleryId: primaryId,
     asset: assetWithPreviewQuery.data ?? null,
+    additionalNecklaceItems: category === "necklace" ? additionalNecklaceItems : [],
     debugEnabled: showDebugOverlay,
     // While the debug panel is open, the slider previews live (even before it's saved).
     // Otherwise, fall back to whatever's been saved for this browser (if anything) --
@@ -138,13 +219,16 @@ export function LiveArStudio() {
   });
 
   async function handleCapture() {
-    if (!sessionId || !selectedJewelleryId) return;
+    if (!sessionId || !primaryId) return;
     setCaptureState("capturing");
     setCaptureErrorMessage(null);
     try {
       const blob = await session.captureFrame();
       if (!blob) throw new Error("The camera isn't ready yet.");
-      const capture = await createLiveArCapture(sessionId, selectedJewelleryId, processedAssetSummary?.id ?? null, blob);
+      // Capture-and-save persists a single result image -- multi-item layering is a
+      // live-preview-only feature for now, so this always saves against the primary
+      // (first-selected) item, same as before this feature existed.
+      const capture = await createLiveArCapture(sessionId, primaryId, processedAssetSummary?.id ?? null, blob);
       setCaptureUrl(capture.result_url);
       setCaptureState("done");
     } catch (err) {
@@ -397,27 +481,61 @@ export function LiveArStudio() {
       </div>
 
       <div className="w-full lg:w-72">
-        <h2 className="mb-3 text-sm font-medium text-neutral-500">Choose a piece</h2>
-        <div className="grid grid-cols-3 gap-2 lg:grid-cols-2">
-          {(jewelleryQuery.data?.items ?? []).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setSelectedJewelleryId(item.id)}
-              className={cn(
-                "rounded-xl border p-2 text-left text-xs",
-                item.id === selectedJewelleryId
-                  ? "border-neutral-900 dark:border-amber-400"
-                  : "border-neutral-200 dark:border-neutral-800"
+        <h2 className="mb-3 text-sm font-medium text-neutral-500">
+          {category === "necklace" ? "Choose pieces to layer" : "Choose a piece"}
+        </h2>
+        {category === "necklace" ? (
+          <>
+            <p className="mb-2 text-[11px] text-neutral-400">
+              Pick more than one to wear them together (e.g. a necklace and a haaram) -- up to{" "}
+              {MAX_SIMULTANEOUS_NECK_ITEMS} at once.
+            </p>
+            <div className="grid grid-cols-3 gap-2 lg:grid-cols-2">
+              {neckItems.map((item) => {
+                const isSelected = selectedNecklaceIds.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => toggleNecklaceItem(item.id)}
+                    className={cn(
+                      "rounded-xl border p-2 text-left text-xs",
+                      isSelected ? "border-neutral-900 dark:border-amber-400" : "border-neutral-200 dark:border-neutral-800"
+                    )}
+                  >
+                    <span className="mr-1">{isSelected ? "☑" : "☐"}</span>
+                    {item.name}
+                    <span className="block text-[10px] text-neutral-400">{item.category.name}</span>
+                  </button>
+                );
+              })}
+              {neckItems.length === 0 && (
+                <p className="col-span-full text-xs text-neutral-400">No necklace or haaram items yet.</p>
               )}
-            >
-              {item.name}
-            </button>
-          ))}
-          {jewelleryQuery.data?.items.length === 0 && (
-            <p className="col-span-full text-xs text-neutral-400">No items in this category yet.</p>
-          )}
-        </div>
+            </div>
+          </>
+        ) : (
+          <div className="grid grid-cols-3 gap-2 lg:grid-cols-2">
+            {(jewelleryQuery.data?.items ?? []).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setSelectedJewelleryId(item.id)}
+                className={cn(
+                  "rounded-xl border p-2 text-left text-xs",
+                  item.id === selectedJewelleryId
+                    ? "border-neutral-900 dark:border-amber-400"
+                    : "border-neutral-200 dark:border-neutral-800"
+                )}
+              >
+                {item.name}
+              </button>
+            ))}
+            {jewelleryQuery.data?.items.length === 0 && (
+              <p className="col-span-full text-xs text-neutral-400">No items in this category yet.</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
