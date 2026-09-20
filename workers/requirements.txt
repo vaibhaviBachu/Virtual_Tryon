@@ -14,6 +14,11 @@ Pillow==10.4.0
 rembg==2.0.59
 onnxruntime==1.19.2
 filetype==1.2.0
+# Was already pulled in transitively (via rembg -> scikit-image/pymatting), but
+# ai/catalogue/background_remover.py's white-background color-threshold cutout now
+# imports it directly (scipy.ndimage's morphology ops) -- pinned explicitly here so
+# that dependency is never silently dropped if rembg's own requirements change.
+scipy==1.17.1
 
 # Milestone 3 — user photo landmark/segmentation pipeline (ai/landmarks/*,
 # ai/segmentation/person_segmenter.py). See ai/models/LICENSES.md for the full research

@@ -41,6 +41,38 @@ def test_remove_background_returns_real_transparent_output():
     assert alpha.min() != alpha.max()
 
 
+def test_remove_background_extracts_a_thin_ring_not_its_enclosed_background():
+    """Regression test for a real bug found against two actual catalogue uploads: a
+    thin gold chain photographed as a large open loop on white came back from the
+    plain rembg/u2net model with the WHITE AREA ENCLOSED BY THE CHAIN kept opaque and
+    the chain itself cut away -- the model favored the large contiguous region over
+    the thin ring around it. Reproduced here with a synthetic thin ring (an annulus,
+    not a filled circle) on a white background, which is the same shape class."""
+    img = Image.new("RGB", (400, 400), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # A ring, not a disc: outer boundary filled, inner boundary painted back to
+    # background white -- so the enclosed area is background, same as a necklace loop.
+    draw.ellipse((80, 80, 320, 320), fill=(212, 175, 55))
+    draw.ellipse((140, 140, 260, 260), fill=(255, 255, 255))
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=95)
+
+    remover = get_remover("rembg_u2net")
+    result = remover.remove_background(buffer.getvalue())
+
+    assert result.success is True
+    output_image = Image.open(io.BytesIO(result.rgba_png_bytes)).convert("RGBA")
+    arr = np.array(output_image)
+
+    # The ring itself (gold-colored pixels) must be opaque...
+    ring_point = arr[100, 200]  # inside the painted gold band
+    assert ring_point[3] > 200, f"expected the ring itself opaque, got alpha={ring_point[3]}"
+    # ...and the area enclosed BY the ring (the hole) must be transparent, not kept
+    # opaque the way the plain saliency model got this wrong.
+    hole_point = arr[200, 200]  # center of the ring, inside the hole
+    assert hole_point[3] < 50, f"expected the ring's enclosed hole transparent, got alpha={hole_point[3]}"
+
+
 def test_remove_background_never_raises_on_bad_input():
     """The honest-failure contract (ai/engines/base.py's RenderResult pattern, reused
     here): even garbage input must come back as success=False, never an unhandled
