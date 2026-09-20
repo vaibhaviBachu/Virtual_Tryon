@@ -74,14 +74,13 @@ export default function LandingPage() {
           </h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-9">
             {CATEGORIES.map((category) => (
-              <Card key={category.slug} className="text-center">
-                <CardContent className="flex flex-col items-center gap-2 p-4">
-                  <div className="h-10 w-10 rounded-full bg-neutral-100 dark:bg-neutral-900" />
-                  <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                    {category.label}
-                  </span>
-                </CardContent>
-              </Card>
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={category.slug}
+                src={`/category-icons/${category.slug}.webp`}
+                alt={category.label}
+                className="aspect-square w-full rounded-2xl object-cover"
+              />
             ))}
           </div>
           <p className="mt-4 text-center text-xs text-neutral-400">

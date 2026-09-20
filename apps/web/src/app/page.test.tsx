@@ -14,8 +14,11 @@ describe("Landing page", () => {
 
   it("lists the jewellery categories", () => {
     render(<LandingPage />);
-    expect(screen.getByText("Earrings")).toBeInTheDocument();
-    expect(screen.getByText("Necklaces")).toBeInTheDocument();
-    expect(screen.getByText("Rings")).toBeInTheDocument();
+    // Each category is now a designed icon image, its label carried in real alt
+    // text (accessible to screen readers) rather than a separate visible <span> --
+    // see apps/web/public/category-icons.
+    expect(screen.getByAltText("Earrings")).toBeInTheDocument();
+    expect(screen.getByAltText("Necklaces")).toBeInTheDocument();
+    expect(screen.getByAltText("Rings")).toBeInTheDocument();
   });
 });
