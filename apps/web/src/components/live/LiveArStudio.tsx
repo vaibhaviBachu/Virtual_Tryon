@@ -24,6 +24,7 @@ import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
 import { cn } from "@/lib/utils";
 import { useLiveArSession } from "@/components/live/useLiveArSession";
+import { BotPreview } from "@/components/live/BotPreview";
 
 // Only these two categories have a functional Live AR pipeline this milestone (spec
 // §26's "do not simultaneously implement all future jewellery categories" rule,
@@ -481,7 +482,14 @@ export function LiveArStudio() {
       </div>
 
       <div className="w-full lg:w-72">
-        <h2 className="mb-3 text-sm font-medium text-neutral-500">
+        <h2 className="mb-3 text-sm font-medium text-neutral-500">On the model</h2>
+        <BotPreview
+          category={category}
+          primaryAsset={assetWithPreviewQuery.data ?? null}
+          additionalItems={category === "necklace" ? additionalNecklaceItems : []}
+        />
+
+        <h2 className="mb-3 mt-6 text-sm font-medium text-neutral-500">
           {category === "necklace" ? "Choose pieces to layer" : "Choose a piece"}
         </h2>
         {category === "necklace" ? (

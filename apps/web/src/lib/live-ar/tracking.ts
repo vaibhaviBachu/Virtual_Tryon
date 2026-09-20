@@ -80,6 +80,40 @@ export async function createLiveTrackers(): Promise<LiveTrackers> {
   };
 }
 
+/** Same models, but in Tasks-Vision's IMAGE running mode (`.detect()`, not
+ * `.detectForVideo()`) -- for the static catalogue "model" preview (BotPreview.tsx),
+ * which analyzes one fixed photo ONCE, not a per-frame video stream. Mixing modes
+ * matters here: VIDEO mode requires monotonically increasing timestamps between calls
+ * and is tuned for temporal smoothing across frames, neither of which applies to a
+ * single still photo -- IMAGE mode is Tasks-Vision's own documented mode for this
+ * exact case. A separate, independent set of landmarker instances from
+ * createLiveTrackers() above (MediaPipe does not support switching an existing
+ * instance's running mode). */
+export async function createImageTrackers(): Promise<LiveTrackers> {
+  const fileset = await FilesetResolver.forVisionTasks(WASM_FILESET_URL);
+
+  const faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "GPU" },
+    runningMode: "IMAGE",
+    numFaces: 1,
+  });
+
+  const poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
+    runningMode: "IMAGE",
+    numPoses: 1,
+  });
+
+  return {
+    faceLandmarker,
+    poseLandmarker,
+    close: () => {
+      faceLandmarker.close();
+      poseLandmarker.close();
+    },
+  };
+}
+
 function toNormalizedPoints(landmarks: { x: number; y: number; z?: number; visibility?: number }[]): NormalizedPoint[] {
   return landmarks.map((l) => ({ x: l.x, y: l.y, z: l.z, visibility: l.visibility }));
 }
@@ -139,6 +173,21 @@ export function detectFrame(
 ): { face: LiveFaceLandmarks | null; pose: LivePoseLandmarks | null } {
   const faceResult = trackers.faceLandmarker.detectForVideo(video, timestampMs);
   const poseResult = trackers.poseLandmarker.detectForVideo(video, timestampMs);
+  return {
+    face: toLiveFaceLandmarks(faceResult),
+    pose: toLivePoseLandmarks(poseResult),
+  };
+}
+
+/** One-shot counterpart to detectFrame, for IMAGE-mode trackers (createImageTrackers)
+ * against a single static photo -- BotPreview.tsx calls this exactly once per loaded
+ * model image, not per frame. */
+export function detectStaticImage(
+  trackers: LiveTrackers,
+  image: HTMLImageElement
+): { face: LiveFaceLandmarks | null; pose: LivePoseLandmarks | null } {
+  const faceResult = trackers.faceLandmarker.detect(image);
+  const poseResult = trackers.poseLandmarker.detect(image);
   return {
     face: toLiveFaceLandmarks(faceResult),
     pose: toLivePoseLandmarks(poseResult),
