@@ -59,6 +59,25 @@ describe("drawJewelleryOverlay", () => {
     drawJewelleryOverlay(ctx, {} as CanvasImageSource, { ...baseTransform, mirrored: true }, 1);
     expect(ctx.scale).toHaveBeenCalledWith(-2, 2);
   });
+
+  it("casts a soft shadow sized off the image's own natural dimensions, not the final on-screen size", () => {
+    const { ctx } = makeFakeCtx();
+    const image = { naturalWidth: 1000, naturalHeight: 500 } as unknown as CanvasImageSource;
+    drawJewelleryOverlay(ctx, image, baseTransform, 1);
+    // Shadow color/blur/offset are set in the *pre-scale* transform space (see
+    // renderer.ts's docstring) -- expressed relative to the image's own 1000x500
+    // natural size, not baseTransform's scaleFactor of 2, since ctx.scale(...) above
+    // already applies that scaling automatically when the shadow is rendered.
+    expect(ctx.shadowColor).toBe("rgba(0, 0, 0, 0.45)");
+    expect(ctx.shadowBlur).toBeCloseTo(1000 * 0.035, 6);
+    expect(ctx.shadowOffsetY).toBeCloseTo(500 * 0.02, 6);
+  });
+
+  it("skips the shadow (rather than throwing) for an image with no readable natural size", () => {
+    const { ctx } = makeFakeCtx();
+    expect(() => drawJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1)).not.toThrow();
+    expect(ctx.shadowBlur).toBeUndefined();
+  });
 });
 
 describe("renderLiveFrame", () => {

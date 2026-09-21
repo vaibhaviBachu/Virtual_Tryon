@@ -28,6 +28,11 @@
  * draw or when (that is the live session hook/component that owns the animation-frame
  * loop) and it never re-fetches or re-decodes the jewellery image (see asset-cache.ts).
  */
+import {
+  JEWELLERY_SHADOW_BLUR_FRACTION_OF_WIDTH,
+  JEWELLERY_SHADOW_COLOR,
+  JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT,
+} from "@/lib/live-ar/constants";
 import type { LiveTransform, PixelPoint } from "@/lib/live-ar/types";
 import type { NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 
@@ -72,8 +77,42 @@ export function drawJewelleryOverlay(
   ctx.translate(transform.anchorPx.x, transform.anchorPx.y);
   ctx.rotate((transform.rotationDegrees * Math.PI) / 180);
   ctx.scale(transform.mirrored ? -transform.scaleFactor : transform.scaleFactor, transform.scaleFactor);
+
+  // Soft contact shadow -- see constants.ts's JEWELLERY_SHADOW_* docstring for why this
+  // exists (grounds the sprite against the skin instead of it reading as a flat sticker)
+  // and why it's shadow-only, never touching the jewellery's own pixels/colors. Canvas
+  // 2D's shadow* properties automatically follow the alpha shape of whatever is drawn in
+  // this same drawImage call, and are specified in the CURRENT (already-scaled/rotated)
+  // transform space -- so sizing them off the image's own natural pixel dimensions here
+  // means the rendered shadow scales correctly with however big this piece currently is,
+  // with no separate scale-factor math needed.
+  const naturalWidth = getNaturalWidth(image);
+  const naturalHeight = getNaturalHeight(image);
+  if (naturalWidth > 0 && naturalHeight > 0) {
+    ctx.shadowColor = JEWELLERY_SHADOW_COLOR;
+    ctx.shadowBlur = naturalWidth * JEWELLERY_SHADOW_BLUR_FRACTION_OF_WIDTH;
+    ctx.shadowOffsetY = naturalHeight * JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT;
+  }
+
   ctx.drawImage(image, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);
   ctx.restore();
+}
+
+/** CanvasImageSource covers several element types (HTMLImageElement, SVGImageElement,
+ * HTMLVideoElement, HTMLCanvasElement, ImageBitmap, ...) that don't share one common
+ * "natural size" property name -- every jewellery asset drawn here is actually an
+ * HTMLImageElement (see asset-cache.ts), these just read that safely without an unsound
+ * cast for whatever else the broader type permits. */
+function getNaturalWidth(image: CanvasImageSource): number {
+  if ("naturalWidth" in image) return image.naturalWidth;
+  if ("width" in image && typeof image.width === "number") return image.width;
+  return 0;
+}
+
+function getNaturalHeight(image: CanvasImageSource): number {
+  if ("naturalHeight" in image) return image.naturalHeight;
+  if ("height" in image && typeof image.height === "number") return image.height;
+  return 0;
 }
 
 function drawDebugPoint(ctx: CanvasRenderingContext2D, point: PixelPoint, color: string, label: string): void {

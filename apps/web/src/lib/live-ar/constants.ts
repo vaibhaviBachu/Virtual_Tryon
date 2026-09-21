@@ -112,3 +112,18 @@ export const DEFAULT_SMOOTHING_TIME_CONSTANT_MS = 120;
 // instead of rendering on top of each other. UNCALIBRATED placeholder, same status as
 // NECKLACE_LENGTH_OFFSET_MULTIPLIER above -- tune against a real camera if it looks off.
 export const NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH = 0.16;
+
+// Soft contact shadow cast by the jewellery sprite onto the skin beneath it (renderer.ts's
+// drawJewelleryOverlay) -- without this, a flat sprite composited straight onto the photo
+// reads as a pasted-on sticker/filter rather than something actually resting against the
+// body (real user feedback: "it should feel like the person is wearing it, not a filter").
+// Deliberately shadow-only: this never touches the jewellery's own pixels/colors, so the
+// product itself still renders exactly as photographed -- only how it's grounded in the
+// scene changes, not what it looks like. Expressed as fractions of the SOURCE image's own
+// natural width/height (not final on-screen size), so it scales correctly with however
+// big the piece is currently rendered. UNCALIBRATED placeholder, same status as
+// NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH above -- tune against a real camera if
+// it looks too heavy/light.
+export const JEWELLERY_SHADOW_COLOR = "rgba(0, 0, 0, 0.45)";
+export const JEWELLERY_SHADOW_BLUR_FRACTION_OF_WIDTH = 0.035;
+export const JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT = 0.02;
