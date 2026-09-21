@@ -3,16 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { drawJewelleryOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
 import type { LiveTransform } from "@/lib/live-ar/types";
 
-/** A minimal but real save()/restore() STACK for the handful of state properties these
- * tests care about -- a plain `{ globalAlpha: 1 }` object mock (this file's earlier
- * version) does not actually restore state on restore(), which would make an inner
- * save/restore pair (drawJewelleryOverlay's shadow pass) leak its dimmed globalAlpha
- * into the real image drawn after it, in the test double only -- a real browser's
- * ctx.restore() does not have that bug, so the mock needs to actually behave like one
- * for these assertions to mean anything. */
+/** A minimal but real save()/restore() STACK for the state properties these tests care
+ * about -- a plain `{ globalAlpha: 1 }` object mock (this file's earlier version) does
+ * not actually restore state on restore(), which would make an inner save/restore pair
+ * (drawJewelleryOverlay's shadow pass) leak its dimmed globalAlpha into the real image
+ * drawn after it, in the test double only -- a real browser's ctx.restore() does not
+ * have that bug, so the mock needs to actually behave like one for these assertions to
+ * mean anything. */
 function makeFakeCtx() {
   const calls: string[] = [];
-  const state = { globalAlpha: 1, fillStyle: "", globalCompositeOperation: "source-over" };
+  const state = { globalAlpha: 1, fillStyle: "" as unknown };
   const stack: (typeof state)[] = [];
   const ctx: Record<string, unknown> = {
     save: vi.fn(() => {
@@ -29,10 +29,16 @@ function makeFakeCtx() {
     // reads after the function has fully returned (which, correctly, is back to
     // whatever it was before the outermost save() -- see this function's docstring).
     drawImage: vi.fn((..._args: unknown[]) => calls.push(`drawImage@${state.globalAlpha}`)),
-    fillRect: vi.fn((x: number, y: number, w: number, h: number) => calls.push(`fillRect(${x},${y},${w},${h})`)),
     translate: vi.fn((x: number, y: number) => calls.push(`translate(${x},${y})`)),
     rotate: vi.fn((r: number) => calls.push(`rotate(${r})`)),
     scale: vi.fn((x: number, y: number) => calls.push(`scale(${x},${y})`)),
+    createRadialGradient: vi.fn((x0: number, y0: number, r0: number, x1: number, y1: number, r1: number) => {
+      calls.push(`createRadialGradient(${x0},${y0},${r0},${x1},${y1},${r1})`);
+      return { addColorStop: vi.fn((offset: number, color: string) => calls.push(`addColorStop(${offset},${color})`)) };
+    }),
+    beginPath: vi.fn(() => calls.push("beginPath")),
+    ellipse: vi.fn((x: number, y: number, rx: number, ry: number) => calls.push(`ellipse(${x},${y},${rx},${ry})`)),
+    fill: vi.fn(() => calls.push(`fill@${state.globalAlpha}`)),
   };
   Object.defineProperty(ctx, "globalAlpha", {
     get: () => state.globalAlpha,
@@ -42,14 +48,8 @@ function makeFakeCtx() {
   });
   Object.defineProperty(ctx, "fillStyle", {
     get: () => state.fillStyle,
-    set: (v: string) => {
+    set: (v: unknown) => {
       state.fillStyle = v;
-    },
-  });
-  Object.defineProperty(ctx, "globalCompositeOperation", {
-    get: () => state.globalCompositeOperation,
-    set: (v: string) => {
-      state.globalCompositeOperation = v;
     },
   });
   return { ctx: ctx as unknown as CanvasRenderingContext2D, calls, state };
@@ -100,30 +100,31 @@ describe("drawJewelleryOverlay", () => {
     expect(ctx.scale).toHaveBeenCalledWith(-2, 2);
   });
 
-  it("draws a dimmer, offset silhouette pass before the real image when the image has a readable natural size", () => {
+  it("draws a soft radial-gradient shadow blob before the real image, sized off the image's own natural width, when a readable natural size is available", () => {
     const { ctx, calls, state } = makeFakeCtx();
     const image = { naturalWidth: 1000, naturalHeight: 500 } as unknown as CanvasImageSource;
     drawJewelleryOverlay(ctx, image, baseTransform, 1);
 
-    // Two full save/restore pairs: the shadow silhouette, then the real image.
+    // Two full save/restore pairs: the shadow blob, then the real image.
     expect(calls.filter((c) => c === "save").length).toBe(2);
     expect(calls.filter((c) => c === "restore").length).toBe(2);
 
-    // drawImage is called twice: once for the shadow copy, DIMMER than the real
-    // image (opacity * JEWELLERY_SHADOW_OPACITY = 1 * 0.4), then once for the real
-    // image at full opacity on top of it.
-    expect(calls).toContain("drawImage@0.4");
-    expect(calls).toContain("drawImage@1");
+    // The shadow is a gradient-filled ellipse (never drawImage -- no compositing
+    // mode involved at all, unlike the two prior, real, broken attempts this
+    // replaced), centered at the local origin (which coincides with the asset's own
+    // anchor point) and sized proportionally to the image's own 1000px natural
+    // width, DIMMER than the real image (opacity * JEWELLERY_SHADOW_OPACITY = 0.4).
+    expect(calls).toContain("createRadialGradient(0,80,0,0,80,400)");
+    expect(calls).toContain("ellipse(0,80,400,160)");
+    expect(calls).toContain("fill@0.4");
 
-    // The shadow pass translates by an offset proportional to the image's own natural
-    // size (not final on-screen size -- see constants.ts) before its drawImage call.
-    expect(calls).toContain(`translate(${1000 * 0.01},${500 * 0.045})`);
-    // ...tints itself to a solid silhouette via source-atop + a fillRect covering
-    // exactly where it drew the image...
-    expect(calls).toContain(`fillRect(-10,-5,1000,500)`);
-    // ...and by the time drawJewelleryOverlay fully returns, alpha is back to
-    // whatever it was before its outermost save() -- confirming restore() actually
-    // undid the shadow's dimming rather than leaking it into anything drawn after.
+    // The real image is drawn once, at full opacity, after the shadow.
+    expect(calls).toContain("drawImage@1");
+    expect(calls.indexOf("fill@0.4")).toBeLessThan(calls.indexOf("drawImage@1"));
+
+    // By the time drawJewelleryOverlay fully returns, alpha is back to whatever it
+    // was before its outermost save() -- confirming restore() actually undid the
+    // shadow's dimming rather than leaking it into anything drawn after.
     expect(state.globalAlpha).toBeCloseTo(1, 6);
   });
 
@@ -131,6 +132,7 @@ describe("drawJewelleryOverlay", () => {
     const { ctx, calls } = makeFakeCtx();
     expect(() => drawJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1)).not.toThrow();
     expect(calls.filter((c) => c.startsWith("drawImage")).length).toBe(1);
+    expect(calls.some((c) => c.startsWith("createRadialGradient") || c.startsWith("ellipse"))).toBe(false);
   });
 });
 
