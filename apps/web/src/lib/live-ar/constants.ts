@@ -112,34 +112,3 @@ export const DEFAULT_SMOOTHING_TIME_CONSTANT_MS = 120;
 // instead of rendering on top of each other. UNCALIBRATED placeholder, same status as
 // NECKLACE_LENGTH_OFFSET_MULTIPLIER above -- tune against a real camera if it looks off.
 export const NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH = 0.16;
-
-// Contact shadow cast by the jewellery sprite onto the skin beneath it (renderer.ts's
-// drawJewelleryOverlay) -- without this, a flat sprite composited straight onto the photo
-// reads as a pasted-on sticker/filter rather than something actually resting against the
-// body (real user feedback: "it should feel like the person is wearing it, not a filter").
-// Deliberately shadow-only: this never touches the jewellery's own pixels/colors, so the
-// product itself still renders exactly as photographed -- only how it's grounded in the
-// scene changes, not what it looks like.
-//
-// Drawn as a soft radial-gradient blob (0% opacity at its edge), not a silhouette of the
-// jewellery itself -- two earlier attempts at a shape-accurate shadow both failed on a
-// real device, confirmed by actual screenshots, not assumed: ctx.shadowColor/shadowBlur/
-// shadowOffset were inconsistently applied under the active scale/rotate transform here
-// (rendered too diffuse to see); a manually-drawn duplicate tinted via
-// globalCompositeOperation "source-atop" composited against the ENTIRE canvas's existing
-// (fully opaque camera-frame) content rather than just the duplicate's own alpha, so it
-// painted a solid grey rectangle instead of a jewellery-shaped shadow. A radial gradient
-// needs no compositing mode at all (plain source-over) and a real contact shadow where a
-// necklace meets the neck (or an earring meets the earlobe) is a soft, generalized
-// darkening at the contact point anyway, not a precise silhouette double -- so shape
-// accuracy was never actually required. Expressed as fractions of the SOURCE image's own
-// natural width (not final on-screen size), so it scales correctly with however big the
-// piece is currently rendered, and centered at the local origin, which coincides exactly
-// with the asset's own anchor/contact point (see drawJewelleryOverlay). UNCALIBRATED
-// placeholder values -- tune against a real camera if it looks too heavy/light, too
-// small/large, or positioned wrong.
-export const JEWELLERY_SHADOW_COLOR = "rgba(0, 0, 0, 1)";
-export const JEWELLERY_SHADOW_OPACITY = 0.4;
-export const JEWELLERY_SHADOW_RADIUS_X_FRACTION_OF_WIDTH = 0.4;
-export const JEWELLERY_SHADOW_RADIUS_Y_TO_X_RATIO = 0.4;
-export const JEWELLERY_SHADOW_CENTER_Y_FRACTION_OF_WIDTH = 0.08;

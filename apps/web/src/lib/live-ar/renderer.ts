@@ -28,13 +28,6 @@
  * draw or when (that is the live session hook/component that owns the animation-frame
  * loop) and it never re-fetches or re-decodes the jewellery image (see asset-cache.ts).
  */
-import {
-  JEWELLERY_SHADOW_CENTER_Y_FRACTION_OF_WIDTH,
-  JEWELLERY_SHADOW_COLOR,
-  JEWELLERY_SHADOW_OPACITY,
-  JEWELLERY_SHADOW_RADIUS_X_FRACTION_OF_WIDTH,
-  JEWELLERY_SHADOW_RADIUS_Y_TO_X_RATIO,
-} from "@/lib/live-ar/constants";
 import type { LiveTransform, PixelPoint } from "@/lib/live-ar/types";
 import type { NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 
@@ -79,65 +72,8 @@ export function drawJewelleryOverlay(
   ctx.translate(transform.anchorPx.x, transform.anchorPx.y);
   ctx.rotate((transform.rotationDegrees * Math.PI) / 180);
   ctx.scale(transform.mirrored ? -transform.scaleFactor : transform.scaleFactor, transform.scaleFactor);
-
-  // Contact shadow -- see constants.ts's JEWELLERY_SHADOW_* docstring for why this
-  // exists (grounds the sprite against the skin instead of it reading as a flat
-  // sticker/filter) and why it's shadow-only, never touching the jewellery's own
-  // pixels/colors.
-  //
-  // Two earlier attempts both failed on a real device, confirmed by the actual
-  // rendered screenshots, not assumed:
-  //  1. ctx.shadowColor/shadowBlur/shadowOffset -- inconsistently applied once a
-  //     scale/rotate transform is active; rendered too diffuse to see at all.
-  //  2. A duplicated, offset copy of the sprite tinted via
-  //     globalCompositeOperation "source-atop" -- WRONG composite choice: source-atop
-  //     masks against the ENTIRE canvas's existing content, which at this point is the
-  //     fully opaque camera frame filling the whole canvas, not just what this
-  //     function drew a moment earlier. The result was a solid grey RECTANGLE, not a
-  //     jewellery-shaped shadow -- because there was no transparent destination for
-  //     "atop" to mask against.
-  //
-  // This third approach has no such failure mode: a soft dark blob painted with a
-  // radial gradient (0% opacity at world), which needs no compositing mode at all
-  // (plain "source-over", the canvas default) and is not shaped to the jewellery's
-  // exact silhouette -- it does not need to be. A real contact shadow where a necklace
-  // meets the neck (or an earring meets the earlobe) is a soft, generalized darkening
-  // right at the contact point, not a precise silhouette double. Centered at the local
-  // origin, which -- because drawImage below is called with (-sourceAnchorPx.x,
-  // -sourceAnchorPx.y) -- IS exactly where the asset's own anchor point (its top-center
-  // contact point, see asset-cache.ts) lands, i.e. already the right spot with no
-  // extra positioning math.
-  const naturalWidth = getNaturalWidth(image);
-  if (naturalWidth > 0) {
-    const radiusX = naturalWidth * JEWELLERY_SHADOW_RADIUS_X_FRACTION_OF_WIDTH;
-    const radiusY = radiusX * JEWELLERY_SHADOW_RADIUS_Y_TO_X_RATIO;
-    const centerY = naturalWidth * JEWELLERY_SHADOW_CENTER_Y_FRACTION_OF_WIDTH;
-
-    ctx.save();
-    ctx.globalAlpha = clampedOpacity * JEWELLERY_SHADOW_OPACITY;
-    const gradient = ctx.createRadialGradient(0, centerY, 0, 0, centerY, radiusX);
-    gradient.addColorStop(0, JEWELLERY_SHADOW_COLOR);
-    gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.ellipse(0, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
   ctx.drawImage(image, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);
   ctx.restore();
-}
-
-/** CanvasImageSource covers several element types (HTMLImageElement, SVGImageElement,
- * HTMLVideoElement, HTMLCanvasElement, ImageBitmap, ...) that don't share one common
- * "natural size" property name -- every jewellery asset drawn here is actually an
- * HTMLImageElement (see asset-cache.ts), this just reads that safely without an unsound
- * cast for whatever else the broader type permits. */
-function getNaturalWidth(image: CanvasImageSource): number {
-  if ("naturalWidth" in image) return image.naturalWidth;
-  if ("width" in image && typeof image.width === "number") return image.width;
-  return 0;
 }
 
 function drawDebugPoint(ctx: CanvasRenderingContext2D, point: PixelPoint, color: string, label: string): void {
