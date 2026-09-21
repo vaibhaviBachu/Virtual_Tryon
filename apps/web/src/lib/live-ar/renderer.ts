@@ -29,9 +29,10 @@
  * loop) and it never re-fetches or re-decodes the jewellery image (see asset-cache.ts).
  */
 import {
-  JEWELLERY_SHADOW_BLUR_FRACTION_OF_WIDTH,
   JEWELLERY_SHADOW_COLOR,
+  JEWELLERY_SHADOW_OFFSET_X_FRACTION_OF_WIDTH,
   JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT,
+  JEWELLERY_SHADOW_OPACITY,
 } from "@/lib/live-ar/constants";
 import type { LiveTransform, PixelPoint } from "@/lib/live-ar/types";
 import type { NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
@@ -78,20 +79,35 @@ export function drawJewelleryOverlay(
   ctx.rotate((transform.rotationDegrees * Math.PI) / 180);
   ctx.scale(transform.mirrored ? -transform.scaleFactor : transform.scaleFactor, transform.scaleFactor);
 
-  // Soft contact shadow -- see constants.ts's JEWELLERY_SHADOW_* docstring for why this
-  // exists (grounds the sprite against the skin instead of it reading as a flat sticker)
-  // and why it's shadow-only, never touching the jewellery's own pixels/colors. Canvas
-  // 2D's shadow* properties automatically follow the alpha shape of whatever is drawn in
-  // this same drawImage call, and are specified in the CURRENT (already-scaled/rotated)
-  // transform space -- so sizing them off the image's own natural pixel dimensions here
-  // means the rendered shadow scales correctly with however big this piece currently is,
-  // with no separate scale-factor math needed.
+  // Contact shadow -- see constants.ts's JEWELLERY_SHADOW_* docstring for why this
+  // exists (grounds the sprite against the skin instead of it reading as a flat
+  // sticker/filter) and why it's shadow-only, never touching the jewellery's own
+  // pixels/colors. Deliberately NOT using ctx.shadowColor/shadowBlur/shadowOffset --
+  // those are inconsistently applied across browsers when a scale/rotate transform is
+  // active (confirmed against a real device: the shadow became too diffuse to see,
+  // i.e. exactly "still floating"). Instead this manually draws a second, offset copy
+  // of the SAME image tinted to a solid dark silhouette (source-atop composites the
+  // fill color only where the shadow copy's own alpha is nonzero, so it exactly
+  // follows the jewellery's real shape, e.g. a necklace's gaps stay gaps) using only
+  // drawImage/fillRect in the already-established local transform -- the same
+  // primitives the real image below uses, so there is no separate API whose
+  // transform-interaction could silently misbehave.
   const naturalWidth = getNaturalWidth(image);
   const naturalHeight = getNaturalHeight(image);
   if (naturalWidth > 0 && naturalHeight > 0) {
-    ctx.shadowColor = JEWELLERY_SHADOW_COLOR;
-    ctx.shadowBlur = naturalWidth * JEWELLERY_SHADOW_BLUR_FRACTION_OF_WIDTH;
-    ctx.shadowOffsetY = naturalHeight * JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT;
+    const shadowOffsetXPx = naturalWidth * JEWELLERY_SHADOW_OFFSET_X_FRACTION_OF_WIDTH;
+    const shadowOffsetYPx = naturalHeight * JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT;
+    const drawX = -transform.sourceAnchorPx.x;
+    const drawY = -transform.sourceAnchorPx.y;
+
+    ctx.save();
+    ctx.globalAlpha = clampedOpacity * JEWELLERY_SHADOW_OPACITY;
+    ctx.translate(shadowOffsetXPx, shadowOffsetYPx);
+    ctx.drawImage(image, drawX, drawY);
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = JEWELLERY_SHADOW_COLOR;
+    ctx.fillRect(drawX, drawY, naturalWidth, naturalHeight);
+    ctx.restore();
   }
 
   ctx.drawImage(image, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);

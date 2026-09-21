@@ -113,17 +113,23 @@ export const DEFAULT_SMOOTHING_TIME_CONSTANT_MS = 120;
 // NECKLACE_LENGTH_OFFSET_MULTIPLIER above -- tune against a real camera if it looks off.
 export const NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH = 0.16;
 
-// Soft contact shadow cast by the jewellery sprite onto the skin beneath it (renderer.ts's
+// Contact shadow cast by the jewellery sprite onto the skin beneath it (renderer.ts's
 // drawJewelleryOverlay) -- without this, a flat sprite composited straight onto the photo
 // reads as a pasted-on sticker/filter rather than something actually resting against the
 // body (real user feedback: "it should feel like the person is wearing it, not a filter").
 // Deliberately shadow-only: this never touches the jewellery's own pixels/colors, so the
 // product itself still renders exactly as photographed -- only how it's grounded in the
-// scene changes, not what it looks like. Expressed as fractions of the SOURCE image's own
-// natural width/height (not final on-screen size), so it scales correctly with however
-// big the piece is currently rendered. UNCALIBRATED placeholder, same status as
-// NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH above -- tune against a real camera if
-// it looks too heavy/light.
-export const JEWELLERY_SHADOW_COLOR = "rgba(0, 0, 0, 0.45)";
-export const JEWELLERY_SHADOW_BLUR_FRACTION_OF_WIDTH = 0.035;
-export const JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT = 0.02;
+// scene changes, not what it looks like.
+//
+// Drawn as a manually-offset, tinted silhouette copy of the same image (see
+// drawJewelleryOverlay), not ctx.shadowColor/shadowBlur/shadowOffset -- those legacy
+// properties were tried first and confirmed unreliable under an active scale/rotate
+// transform on a real device (the shadow rendered too diffuse to see at all, i.e. still
+// looked "floating"). Offsets are fractions of the SOURCE image's own natural
+// width/height (not final on-screen size), so they scale correctly with however big the
+// piece is currently rendered. UNCALIBRATED placeholder values -- tune against a real
+// camera if it looks too heavy/light or offset in the wrong direction.
+export const JEWELLERY_SHADOW_COLOR = "#000000";
+export const JEWELLERY_SHADOW_OPACITY = 0.4;
+export const JEWELLERY_SHADOW_OFFSET_X_FRACTION_OF_WIDTH = 0.01;
+export const JEWELLERY_SHADOW_OFFSET_Y_FRACTION_OF_HEIGHT = 0.045;
