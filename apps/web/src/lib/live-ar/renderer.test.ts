@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { drawJewelleryOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
+import { drawJewelleryOverlay, drawSegmentationDebugOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
 import type { LiveTransform } from "@/lib/live-ar/types";
 
 function makeFakeCtx() {
@@ -78,6 +78,27 @@ describe("renderLiveFrame", () => {
     expect(calls[0]).toBe("clearRect");
     expect(calls[1]).toBe("drawImage"); // the video frame
     expect(calls).toContain("save"); // the overlay composition
+  });
+});
+
+// M6.3 (docs/live-ar-realism-architecture.md §6/§8/§17): debug-only segmentation mask
+// overlay. Only the call sequence/scaling arguments are tested -- this jsdom test
+// environment has no real getContext("2d")/ImageData implementation (verified
+// directly), so a fake mask "source" (mirroring makeFakeCtx's approach) is used
+// instead of an actual canvas.
+describe("drawSegmentationDebugOverlay", () => {
+  it("draws the mask source scaled from its native size up to the video's actual size, in one drawImage call", () => {
+    const { ctx, calls } = makeFakeCtx();
+    const fakeMaskCanvas = {} as CanvasImageSource;
+    drawSegmentationDebugOverlay(ctx, fakeMaskCanvas, 256, 256, 1280, 960);
+    expect(calls).toEqual(["drawImage"]);
+    expect(ctx.drawImage).toHaveBeenCalledWith(fakeMaskCanvas, 0, 0, 256, 256, 0, 0, 1280, 960);
+  });
+
+  it("never touches save/restore/transform state -- it's a plain scaled blit, not a transformed sprite", () => {
+    const { ctx, calls } = makeFakeCtx();
+    drawSegmentationDebugOverlay(ctx, {} as CanvasImageSource, 256, 256, 640, 480);
+    expect(calls).toEqual(["drawImage"]);
   });
 });
 

@@ -8,10 +8,17 @@ import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
 import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { planCategoryRenders } from "@/lib/live-ar/geometry";
-import { NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH } from "@/lib/live-ar/constants";
+import { NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH, SEGMENTATION_INTERVAL_MS_DEFAULT } from "@/lib/live-ar/constants";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
-import { drawJewelleryOverlay, drawNecklaceDebugOverlay, ensureCanvasSize, renderLiveFrame } from "@/lib/live-ar/renderer";
+import {
+  drawJewelleryOverlay,
+  drawNecklaceDebugOverlay,
+  drawSegmentationDebugOverlay,
+  ensureCanvasSize,
+  renderLiveFrame,
+} from "@/lib/live-ar/renderer";
+import { buildSegmentationDebugRgba, createLiveSegmenter, runSegmentation, SegmentationCadenceScheduler, type LiveSegmenter } from "@/lib/live-ar/segmentation";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
 import { createLiveTrackers, detectFrame, type LiveTrackers } from "@/lib/live-ar/tracking";
 import { TrackingStateMachine } from "@/lib/live-ar/tracking-state";
@@ -78,6 +85,15 @@ export interface UseLiveArSessionArgs {
    * anchor's horizontal position (a fraction of shoulder width). `null`/`undefined`
    * means zero offset -- the plain shoulder midpoint, unchanged behavior. */
   debugNeckHorizontalOffsetOverride?: number | null;
+  /** M6.3 (docs/live-ar-realism-architecture.md §6/§7/§17): draws the colorized
+   * segmentation category mask on top of the video frame, AFTER the jewellery, for
+   * visual inspection only. Never affects jewellery placement/compositing -- when
+   * false (the default), nothing from M6.3 is drawn, and the customer-facing result is
+   * byte-for-byte the same as before this milestone. The segmenter itself still loads
+   * and runs on its own cadence regardless of this flag (see the module-level comment
+   * above `useLiveArSession`'s render loop) so real timing data doesn't depend on this
+   * panel happening to be open. */
+  showSegmentationDebug?: boolean;
 }
 
 export interface UseLiveArSessionResult {
@@ -97,6 +113,11 @@ export interface UseLiveArSessionResult {
    * numeric readout doesn't force a re-render every frame. Null when debugEnabled is
    * false, the category isn't "necklace", or there's no valid transform this frame. */
   debugSnapshot: NecklaceDebugSnapshot | null;
+  /** M6.3: whether the multiclass ImageSegmenter proof-of-concept model has loaded.
+   * "error" is non-fatal to the rest of the session (Step 17) -- camera/tracking/
+   * jewellery rendering continue exactly as before regardless of this status. */
+  segmentationStatus: "idle" | "loading" | "ready" | "error";
+  segmentationError: string | null;
   /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
    * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
    * canvas isn't ready yet. */
@@ -114,11 +135,20 @@ export function useLiveArSession({
   debugEnabled = false,
   debugNeckFractionOverride = null,
   debugNeckHorizontalOffsetOverride = null,
+  showSegmentationDebug = false,
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const trackersRef = useRef<LiveTrackers | null>(null);
+  // M6.3 -- see the render loop below for why loading/running is unconditional but
+  // drawing is gated behind showSegmentationDebugRef.
+  const segmenterRef = useRef<LiveSegmenter | null>(null);
+  const segmentationSchedulerRef = useRef(new SegmentationCadenceScheduler(SEGMENTATION_INTERVAL_MS_DEFAULT));
+  // One reused scratch canvas for the debug mask, created lazily on first use and
+  // resized only when the mask's own native resolution changes -- never allocated
+  // fresh per frame (Step 5).
+  const segmentationDebugCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const assetGeometryRef = useRef<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null>(null);
   // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
   // fresh every frame inside the render loop (never restarts it), updated by the
@@ -139,9 +169,15 @@ export function useLiveArSession({
   const [readiness, setReadiness] = useState<ReadinessResult<string> | null>(null);
   const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot>(performanceTrackerRef.current.snapshot());
   const [debugSnapshot, setDebugSnapshot] = useState<NecklaceDebugSnapshot | null>(null);
+  const [segmentationStatus, setSegmentationStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [segmentationError, setSegmentationError] = useState<string | null>(null);
   const lastDebugStateUpdateAtMsRef = useRef<number>(0);
   const debugEnabledRef = useRef(debugEnabled);
   debugEnabledRef.current = debugEnabled;
+  // Read fresh every frame -- toggling the debug checkbox must not tear down/restart
+  // the render loop (same rationale as debugEnabledRef above).
+  const showSegmentationDebugRef = useRef(showSegmentationDebug);
+  showSegmentationDebugRef.current = showSegmentationDebug;
   // Read fresh every frame from a ref (not render-loop-effect state) so dragging the
   // calibration slider doesn't tear down and restart tracking/smoothing state each tick.
   const debugNeckFractionOverrideRef = useRef(debugNeckFractionOverride);
@@ -203,6 +239,41 @@ export function useLiveArSession({
       cancelled = true;
       trackersRef.current?.close();
       trackersRef.current = null;
+    };
+  }, []);
+
+  // M6.3: load the multiclass ImageSegmenter proof-of-concept once per mount, the same
+  // one-time lifecycle as the trackers effect above (Step 16). Deliberately NON-FATAL
+  // on failure (Step 17): a segmentation load/init error only sets segmentationStatus
+  // to "error" -- it never blocks camera/tracking/jewellery, which is exactly why this
+  // effect neither reads nor sets any of that other state.
+  useEffect(() => {
+    let cancelled = false;
+    // Captured once, up front, for the cleanup closure below -- this ref's `.current`
+    // is only ever mutated by this scheduler's own methods after creation, never
+    // reassigned to a different object, but capturing it locally avoids relying on
+    // that invariant still holding by the time cleanup runs.
+    const scheduler = segmentationSchedulerRef.current;
+    setSegmentationStatus("loading");
+    createLiveSegmenter()
+      .then((live) => {
+        if (cancelled) {
+          live.close();
+          return;
+        }
+        segmenterRef.current = live;
+        setSegmentationStatus("ready");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSegmentationError(err instanceof Error ? err.message : "Segmentation could not be started.");
+        setSegmentationStatus("error");
+      });
+    return () => {
+      cancelled = true;
+      segmenterRef.current?.close();
+      segmenterRef.current = null;
+      scheduler.reset();
     };
   }, []);
 
@@ -294,6 +365,22 @@ export function useLiveArSession({
       const t0 = performance.now();
       const { face, pose } = detectFrame(trackers, video, nowMs);
       const t1 = performance.now();
+
+      // M6.3 (docs/live-ar-realism-architecture.md §6/§8/§17): segmentation runs on its
+      // own cadence, independent of the jewellery tracking/geometry/render stages above
+      // and below -- deliberately unconditional on showSegmentationDebug (see that
+      // prop's own doc comment) so real timing data reflects the model's ongoing cost,
+      // not just the cost while a human happens to have the debug panel open.
+      // segmentationMs is null on a cadence-skipped frame -- see FrameSample's own doc
+      // comment on why that must NOT be recorded as 0ms.
+      let segmentationMs: number | null = null;
+      const segmenter = segmenterRef.current;
+      if (segmenter && segmentationSchedulerRef.current.shouldRun(frameStartMs)) {
+        const segStart = performance.now();
+        const segResult = runSegmentation(segmenter, video, nowMs);
+        segmentationMs = performance.now() - segStart;
+        segmentationSchedulerRef.current.recordRun(frameStartMs, segResult);
+      }
 
       const loaded = assetGeometryRef.current;
       let overlays: { image: HTMLImageElement; transform: LiveTransform; opacity: number }[] = [];
@@ -391,6 +478,37 @@ export function useLiveArSession({
         }
       }
 
+      // M6.3 debug-only mask visualization: drawn AFTER the jewellery, using whatever
+      // the cadence scheduler currently holds (a fresh mask from this frame, or a
+      // stale one from an earlier frame -- Step 14's "stale-mask reuse"). Fully gated
+      // behind showSegmentationDebugRef -- when false, none of this runs, and the
+      // canvas is byte-for-byte what it was before M6.3 (Step 20).
+      if (showSegmentationDebugRef.current) {
+        const latestMask = segmentationSchedulerRef.current.getLatest();
+        if (latestMask) {
+          if (!segmentationDebugCanvasRef.current) segmentationDebugCanvasRef.current = document.createElement("canvas");
+          const maskCanvas = segmentationDebugCanvasRef.current;
+          if (maskCanvas.width !== latestMask.maskWidthPx || maskCanvas.height !== latestMask.maskHeightPx) {
+            maskCanvas.width = latestMask.maskWidthPx;
+            maskCanvas.height = latestMask.maskHeightPx;
+          }
+          const maskCtx = maskCanvas.getContext("2d");
+          if (maskCtx) {
+            const rgba = buildSegmentationDebugRgba(latestMask.categoryData, latestMask.maskWidthPx, latestMask.maskHeightPx);
+            // TS's DOM lib types ImageData's constructor as wanting a Uint8ClampedArray
+            // backed specifically by ArrayBuffer (not the broader ArrayBufferLike a
+            // freshly-constructed typed array is inferred as) -- a typing-only mismatch,
+            // never a real SharedArrayBuffer here, so the cast is safe.
+            maskCtx.putImageData(
+              new ImageData(rgba as Uint8ClampedArray<ArrayBuffer>, latestMask.maskWidthPx, latestMask.maskHeightPx),
+              0,
+              0
+            );
+            drawSegmentationDebugOverlay(ctx, maskCanvas, latestMask.maskWidthPx, latestMask.maskHeightPx, videoWidthPx, videoHeightPx);
+          }
+        }
+      }
+
       const totalFrameMs = previousFrameAtMs === null ? t3 - t0 : frameStartMs - previousFrameAtMs;
       performanceTrackerRef.current.record({
         totalFrameMs,
@@ -398,6 +516,7 @@ export function useLiveArSession({
         geometryMs: t2 - t1,
         renderMs: t3 - t2,
         droppedFrame: totalFrameMs > DROPPED_FRAME_THRESHOLD_MS,
+        segmentationMs,
       });
 
       setTrackingStatus(primaryStatus);
@@ -439,6 +558,8 @@ export function useLiveArSession({
     readiness,
     performance: performanceSnapshot,
     debugSnapshot,
+    segmentationStatus,
+    segmentationError,
     captureFrame,
   };
 }

@@ -19,7 +19,7 @@ import {
   readSavedNeckHorizontalOffsetOverride,
   saveNeckHorizontalOffsetOverride,
 } from "@/lib/live-ar/neck-horizontal-offset-override";
-import { formatPerformanceOverlayText } from "@/lib/live-ar/performance";
+import { formatPerformanceOverlayText, formatSegmentationDebugText } from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
 import { cn } from "@/lib/utils";
@@ -68,6 +68,11 @@ export function LiveArStudio() {
   // their raw numeric values, so a real-camera placement question can be answered with
   // actual runtime numbers instead of a screenshot and a guess.
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  // M6.3 (docs/live-ar-realism-architecture.md §6/§7/§17): dev-only toggle for the
+  // multiclass segmentation debug mask. Independent of showDebugOverlay above --
+  // segmentation applies to every category, not just necklace, and this milestone is
+  // explicitly a proof of concept, not a replacement for the necklace geometry panel.
+  const [showSegmentationDebug, setShowSegmentationDebug] = useState(false);
   // Persisted, per-browser calibration override (see neck-fraction-override.ts) -- the
   // automatic default from constants.ts is used unless/until someone saves a value from
   // the slider below, at which point it applies on every necklace session in THIS
@@ -217,6 +222,7 @@ export function LiveArStudio() {
     debugNeckFractionOverride: category === "necklace" ? (showDebugOverlay ? neckFractionPreview : savedNeckFraction) : null,
     debugNeckHorizontalOffsetOverride:
       category === "necklace" ? (showDebugOverlay ? neckHorizontalOffsetPreview : savedNeckHorizontalOffset) : null,
+    showSegmentationDebug,
   });
 
   async function handleCapture() {
@@ -282,6 +288,15 @@ export function LiveArStudio() {
                 {formatPerformanceOverlayText(session.performance)}
               </div>
             )}
+
+            {/* M6.3 proof of concept -- real inference timing for real-device
+                verification (docs/live-ar-realism-verification.md's M6.3 section),
+                never estimated. Dev-only, never part of the customer experience. */}
+            {showSegmentationDebug && (
+              <div className="absolute left-3 bottom-3 rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-cyan-300">
+                {formatSegmentationDebugText(session.segmentationStatus, session.segmentationError, session.performance.segmentation)}
+              </div>
+            )}
           </div>
 
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
@@ -314,6 +329,15 @@ export function LiveArStudio() {
                   {showDebugOverlay ? "Hide" : "Show"} necklace debug
                 </button>
               )}
+              {/* M6.3 proof of concept -- dev-only, never part of the customer
+                  experience (docs/live-ar-realism-architecture.md §6/§7/§17). */}
+              <button
+                type="button"
+                className="text-xs text-neutral-400 underline-offset-2 hover:underline"
+                onClick={() => setShowSegmentationDebug((v) => !v)}
+              >
+                {showSegmentationDebug ? "Hide" : "Show"} segmentation debug
+              </button>
               <Button onClick={handleCapture} disabled={isLoadingPipeline || captureState === "capturing"}>
                 {captureState === "capturing" ? "Saving…" : "Capture"}
               </Button>

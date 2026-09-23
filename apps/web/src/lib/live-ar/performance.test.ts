@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PerformanceTracker, formatPerformanceOverlayText } from "@/lib/live-ar/performance";
+import { PerformanceTracker, computeTimingStats, formatPerformanceOverlayText } from "@/lib/live-ar/performance";
 
 function sample(overrides: Partial<Parameters<PerformanceTracker["record"]>[0]> = {}) {
   return { totalFrameMs: 33.3, trackingMs: 8, geometryMs: 0.4, renderMs: 2, droppedFrame: false, ...overrides };
@@ -18,6 +18,7 @@ describe("PerformanceTracker", () => {
       avgRenderMs: 0,
       droppedFrameCount: 0,
       sampleCount: 0,
+      segmentation: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
     });
   });
 
@@ -57,6 +58,60 @@ describe("PerformanceTracker", () => {
     tracker.record(sample());
     tracker.reset();
     expect(tracker.snapshot().sampleCount).toBe(0);
+  });
+
+  // M6.3 (docs/live-ar-realism-architecture.md §8/§10/§17).
+  describe("segmentation timing (M6.3)", () => {
+    it("reports all-zero segmentation stats when no frame ever carried a segmentationMs (unchanged pre-M6.3 behavior)", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample());
+      tracker.record(sample());
+      expect(tracker.snapshot().segmentation).toEqual({ sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 });
+    });
+
+    it("excludes cadence-skipped frames (null/undefined segmentationMs) from segmentation stats entirely, rather than counting them as 0ms", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ segmentationMs: 80 }));
+      tracker.record(sample({ segmentationMs: null })); // skipped this frame
+      tracker.record(sample()); // segmentationMs omitted entirely -- same as null
+      tracker.record(sample({ segmentationMs: 100 }));
+      const stats = tracker.snapshot().segmentation;
+      expect(stats.sampleCount).toBe(2); // NOT 4 -- the two skipped frames don't count
+      expect(stats.avgMs).toBeCloseTo(90, 6);
+      expect(stats.minMs).toBe(80);
+      expect(stats.maxMs).toBe(100);
+    });
+  });
+});
+
+describe("computeTimingStats", () => {
+  it("returns all-zero stats (sampleCount 0) for an empty set -- never a fabricated number", () => {
+    expect(computeTimingStats([])).toEqual({ sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 });
+  });
+
+  it("computes real average/median/min/max from a small hand-checkable set", () => {
+    const stats = computeTimingStats([10, 20, 30, 40, 50]);
+    expect(stats.sampleCount).toBe(5);
+    expect(stats.avgMs).toBeCloseTo(30, 6);
+    expect(stats.medianMs).toBe(30);
+    expect(stats.minMs).toBe(10);
+    expect(stats.maxMs).toBe(50);
+  });
+
+  it("computes the median as the average of the two middle values for an even-sized set", () => {
+    expect(computeTimingStats([10, 20, 30, 40]).medianMs).toBe(25);
+  });
+
+  it("computes p95 from the actual distribution, matching PerformanceTracker's own p95FrameMs formula", () => {
+    const values = Array.from({ length: 100 }, (_, i) => i + 1); // 1..100
+    expect(computeTimingStats(values).p95Ms).toBe(95);
+  });
+
+  it("is order-independent (does not mutate or depend on input ordering)", () => {
+    const unordered = [50, 10, 40, 20, 30];
+    const stats = computeTimingStats(unordered);
+    expect(unordered).toEqual([50, 10, 40, 20, 30]); // input array untouched
+    expect(stats.medianMs).toBe(30);
   });
 });
 

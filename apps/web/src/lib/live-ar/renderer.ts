@@ -129,6 +129,28 @@ export function drawNecklaceDebugOverlay(ctx: CanvasRenderingContext2D, snapshot
   drawDebugPoint(ctx, snapshot.finalAttachmentPx, "white", "JEWELLERY ATTACHMENT");
 }
 
+/** Draws a pre-built segmentation-mask canvas (see useLiveArSession.ts -- it owns and
+ * reuses ONE scratch canvas across frames, per Step 5's "avoid unnecessary canvas
+ * allocations every frame"; this function never creates one itself) onto the main
+ * canvas, scaled up from the mask's own native resolution (e.g. 256x256) to the video's
+ * actual pixel size, in the SAME unmirrored canvas space the video/jewellery are
+ * already drawn in. M6.3 debug-only (docs/live-ar-realism-architecture.md §6/§8/§17) --
+ * never called unless the caller explicitly enables the segmentation debug toggle, and
+ * has no effect on jewellery placement/compositing. Because this draws into the same
+ * coordinate space as everything else (no independent mirror, no separate transform),
+ * the wrapping <div>'s single CSS mirror transform (coordinates.ts) already applies to
+ * it correctly, exactly like the necklace debug overlay above. */
+export function drawSegmentationDebugOverlay(
+  ctx: CanvasRenderingContext2D,
+  maskSource: CanvasImageSource,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  videoWidthPx: number,
+  videoHeightPx: number
+): void {
+  ctx.drawImage(maskSource, 0, 0, maskWidthPx, maskHeightPx, 0, 0, videoWidthPx, videoHeightPx);
+}
+
 /** Resizes a canvas to match the video's intrinsic pixel dimensions. Call this only
  * when the size actually changed (e.g. camera resolution negotiated after startup) --
  * resizing a canvas clears it and is not free, so it must not run every frame. */

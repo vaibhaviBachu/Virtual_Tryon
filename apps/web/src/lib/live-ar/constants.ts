@@ -112,3 +112,19 @@ export const DEFAULT_SMOOTHING_TIME_CONSTANT_MS = 120;
 // instead of rendering on top of each other. UNCALIBRATED placeholder, same status as
 // NECKLACE_LENGTH_OFFSET_MULTIPLIER above -- tune against a real camera if it looks off.
 export const NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH = 0.16;
+
+// M6.3 (docs/live-ar-realism-architecture.md §6/§8/§17): how often the multiclass
+// ImageSegmenter runs a new inference, in milliseconds -- NOT every rendered frame.
+// Google's own published benchmark for this exact model (selfie_multiclass_256x256) is
+// 217.76ms CPU / 71.24ms GPU per inference on a Pixel 6 (see Sources in the architecture
+// doc) -- even the GPU figure alone exceeds one full 24-30fps frame budget (33-42ms), so
+// running it every frame would stall the whole render loop. 500ms (2 inferences/sec) is
+// a deliberately conservative STARTING point chosen to be safely slower than any
+// plausible per-inference cost on this app's own hardware, not a value derived from
+// this app's own measurement -- it is UNCALIBRATED pending the real-device numbers
+// docs/live-ar-realism-verification.md's M6.3 section records; tune it once those are
+// in, the same way NECKLACE_LENGTH_OFFSET_MULTIPLIER above is flagged for future
+// calibration. Jewellery tracking/geometry/render continue at the full RAF rate
+// regardless -- only segmentation itself is throttled (see segmentation.ts's
+// SegmentationCadenceScheduler).
+export const SEGMENTATION_INTERVAL_MS_DEFAULT = 500;
