@@ -56,6 +56,7 @@ import type {
   JewelleryAssetGeometry,
   LiveFaceLandmarks,
   LivePoseLandmarks,
+  LiveTransform,
   NormalizedPoint,
   PixelPoint,
   RotationResult,
@@ -348,6 +349,47 @@ export function buildLiveTransform(
     sourceAnchorPx: assetGeometry.anchorPx,
     mirrored,
   };
+}
+
+/** Maps a point in the jewellery asset's OWN pixel space through the exact same
+ * translate -> rotate -> scale composition `renderer.ts`'s `drawJewelleryOverlay` uses --
+ * moved here (M6.4, docs/live-ar-realism-architecture.md §17) from debug.ts, which
+ * originally had the only copy, so occlusion.ts's region computation and debug.ts's
+ * "final visible bbox" reporting share ONE implementation instead of two that could
+ * silently drift apart. No behavior change from the original: debug.test.ts's existing
+ * assertions on this exact math still pass unchanged. */
+export function applyLiveTransformToPoint(transform: LiveTransform, assetPx: PixelPoint): PixelPoint {
+  const dx = assetPx.x - transform.sourceAnchorPx.x;
+  const dy = assetPx.y - transform.sourceAnchorPx.y;
+  const scaleX = transform.mirrored ? -transform.scaleFactor : transform.scaleFactor;
+  const scaledX = dx * scaleX;
+  const scaledY = dy * transform.scaleFactor;
+  const theta = (transform.rotationDegrees * Math.PI) / 180;
+  const rotatedX = scaledX * Math.cos(theta) - scaledY * Math.sin(theta);
+  const rotatedY = scaledX * Math.sin(theta) + scaledY * Math.cos(theta);
+  return { x: transform.anchorPx.x + rotatedX, y: transform.anchorPx.y + rotatedY };
+}
+
+/** The jewellery sprite's actual rendered footprint in canvas pixel space -- the same
+ * bounding box `drawJewelleryOverlay` would paint into, computed by transforming the
+ * asset's own alpha-bounding-box corners through `applyLiveTransformToPoint`. Used by
+ * occlusion.ts (M6.4) to know which region of the segmentation mask is even relevant to
+ * a given jewellery item, and by debug.ts's necklace snapshot (its pre-existing
+ * `finalVisibleBboxPx` field, refactored onto this shared implementation). */
+export function computeTransformedBoundingBox(
+  transform: LiveTransform,
+  assetGeometry: JewelleryAssetGeometry
+): [number, number, number, number] {
+  const [l, t, r, b] = assetGeometry.alphaBbox;
+  const corners = [
+    { x: l, y: t },
+    { x: r, y: t },
+    { x: l, y: b },
+    { x: r, y: b },
+  ].map((corner) => applyLiveTransformToPoint(transform, corner));
+  const xs = corners.map((c) => c.x);
+  const ys = corners.map((c) => c.y);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
 /** One renderable unit for a frame: a slot (e.g. "left"/"right" for a pair of

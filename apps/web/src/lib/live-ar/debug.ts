@@ -20,7 +20,7 @@
  * reporting one would be exactly the kind of fabricated number this project's docs
  * repeatedly prohibit.
  */
-import { resolveEarPoints } from "@/lib/live-ar/geometry";
+import { applyLiveTransformToPoint, computeTransformedBoundingBox, resolveEarPoints } from "@/lib/live-ar/geometry";
 import { safeLandmarkZ } from "@/lib/live-ar/depth";
 import { computeNeckReferenceFrame } from "@/lib/live-ar/neck-reference";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, LiveTransform, PixelPoint } from "@/lib/live-ar/types";
@@ -86,22 +86,6 @@ export interface NecklaceDebugSnapshot {
    * Negative means the left shoulder is closer to the camera. Null unless both
    * shoulders' z are available. */
   shoulderDepthDeltaZ: number | null;
-}
-
-/** Maps a point in the jewellery asset's OWN pixel space through the exact same
- * translate -> rotate -> scale composition `renderer.ts`'s `drawJewelleryOverlay` uses,
- * so the reported "final visible bbox" is what actually gets drawn, not a re-derivation
- * that could silently drift from the real renderer. */
-function transformAssetPoint(transform: LiveTransform, assetPx: PixelPoint): PixelPoint {
-  const dx = assetPx.x - transform.sourceAnchorPx.x;
-  const dy = assetPx.y - transform.sourceAnchorPx.y;
-  const scaleX = transform.mirrored ? -transform.scaleFactor : transform.scaleFactor;
-  const scaledX = dx * scaleX;
-  const scaledY = dy * transform.scaleFactor;
-  const theta = (transform.rotationDegrees * Math.PI) / 180;
-  const rotatedX = scaledX * Math.cos(theta) - scaledY * Math.sin(theta);
-  const rotatedY = scaledX * Math.sin(theta) + scaledY * Math.cos(theta);
-  return { x: transform.anchorPx.x + rotatedX, y: transform.anchorPx.y + rotatedY };
 }
 
 function fmtPt(p: PixelPoint | null): string {
@@ -197,17 +181,8 @@ export function computeNecklaceDebugSnapshot(
   );
 
   const assetAttachmentPx = assetGeometry.anchorPx;
-  const transformedAssetAttachmentPx = transformAssetPoint(transform, assetGeometry.anchorPx);
-  const [l, t, r, b] = assetGeometry.alphaBbox;
-  const corners = [
-    { x: l, y: t },
-    { x: r, y: t },
-    { x: l, y: b },
-    { x: r, y: b },
-  ].map((corner) => transformAssetPoint(transform, corner));
-  const xs = corners.map((c) => c.x);
-  const ys = corners.map((c) => c.y);
-  const finalVisibleBboxPx: [number, number, number, number] = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  const transformedAssetAttachmentPx = applyLiveTransformToPoint(transform, assetGeometry.anchorPx);
+  const finalVisibleBboxPx = computeTransformedBoundingBox(transform, assetGeometry);
 
   return {
     imageWidthPx,

@@ -7,15 +7,17 @@ import {
   NECKLACE_ANCHOR_VERTICAL_OFFSET_FRACTION,
 } from "@/lib/live-ar/constants";
 import {
+  applyLiveTransformToPoint,
   buildLiveTransform,
   computeAnchor,
   computeEarringRotation,
   computeNecklaceRotation,
   computeRotation,
   computeScale,
+  computeTransformedBoundingBox,
   planCategoryRenders,
 } from "@/lib/live-ar/geometry";
-import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, NormalizedPoint } from "@/lib/live-ar/types";
+import type { JewelleryAssetGeometry, LiveFaceLandmarks, LiveTransform, LivePoseLandmarks, NormalizedPoint } from "@/lib/live-ar/types";
 
 const IMAGE_W = 1000;
 const IMAGE_H = 1200;
@@ -345,6 +347,49 @@ describe("planCategoryRenders", () => {
     expect(plans).toHaveLength(2);
     expect(plans[0].transform).toBeNull();
     expect(plans[1].transform).toBeNull();
+  });
+});
+
+// M6.4 (docs/live-ar-realism-architecture.md §17): moved here from debug.ts so
+// occlusion.ts's region computation and debug.ts's bbox reporting share one
+// implementation. No behavior change -- debug.test.ts's existing assertions on this
+// exact math (built from real recovered render coordinates) still pass unchanged.
+describe("applyLiveTransformToPoint / computeTransformedBoundingBox (M6.4)", () => {
+  const identityTransform: LiveTransform = {
+    anchorPx: { x: 500, y: 600 },
+    scaleFactor: 2,
+    rotationDegrees: 0,
+    sourceAnchorPx: { x: 100, y: 10 },
+    mirrored: false,
+  };
+
+  it("maps the asset's own attachment point exactly onto the transform's anchor (by construction)", () => {
+    const result = applyLiveTransformToPoint(identityTransform, identityTransform.sourceAnchorPx);
+    expect(result).toEqual(identityTransform.anchorPx);
+  });
+
+  it("scales a point's offset from the source anchor by scaleFactor, no rotation", () => {
+    const result = applyLiveTransformToPoint(identityTransform, { x: 180, y: 290 });
+    // dx=80, dy=280 -> scaled (160, 560) -> anchor (500,600) + that = (660, 1160)
+    expect(result.x).toBeCloseTo(660, 6);
+    expect(result.y).toBeCloseTo(1160, 6);
+  });
+
+  it("flips the x offset when mirrored", () => {
+    const mirrored: LiveTransform = { ...identityTransform, mirrored: true };
+    const result = applyLiveTransformToPoint(mirrored, { x: 180, y: 10 }); // dx=80, dy=0
+    expect(result.x).toBeCloseTo(500 - 160, 6); // mirrored -> negated x offset
+    expect(result.y).toBeCloseTo(600, 6);
+  });
+
+  it("computeTransformedBoundingBox matches drawJewelleryOverlay's math for a simple scale-only case", () => {
+    const geometry = makeAssetGeometry({ alphaBbox: [20, 10, 180, 290], anchorPx: { x: 100, y: 10 } });
+    const bbox = computeTransformedBoundingBox(identityTransform, geometry);
+    // Same corners as debug.test.ts's own hand-worked example.
+    expect(bbox[0]).toBeCloseTo(340, 6); // left
+    expect(bbox[1]).toBeCloseTo(600, 6); // top
+    expect(bbox[2]).toBeCloseTo(660, 6); // right
+    expect(bbox[3]).toBeCloseTo(1160, 6); // bottom
   });
 });
 

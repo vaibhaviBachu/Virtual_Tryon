@@ -128,3 +128,16 @@ export const NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH = 0.16;
 // regardless -- only segmentation itself is throttled (see segmentation.ts's
 // SegmentationCadenceScheduler).
 export const SEGMENTATION_INTERVAL_MS_DEFAULT = 500;
+
+// M6.4 (docs/live-ar-realism-architecture.md §17): how old the latest successful
+// segmentation mask may be before occlusion compositing stops using it and falls back
+// to "no occlusion" (the pre-M6.4 behavior -- jewellery draws fully visible, never
+// hidden based on stale data). Real M6.3 device measurement: cadence ~500ms, inference
+// itself averaged 234.5ms (p95 276.5ms) -- so a healthy segmenter's worst-case gap
+// between two successful updates is roughly 500 + 277 ≈ 777ms. 2000ms is chosen as
+// roughly 2.5x that healthy worst case: comfortably above ordinary jitter so it never
+// trips during normal operation, while still catching a segmenter that has silently
+// stopped updating for several consecutive cycles (e.g. after an error) well before its
+// mask could be describing a meaningfully different scene. UNCALIBRATED beyond this
+// reasoning -- re-derive from real numbers if M6.3's measured timings change materially.
+export const OCCLUSION_STALE_MASK_THRESHOLD_MS = 2000;

@@ -19,6 +19,7 @@ describe("PerformanceTracker", () => {
       droppedFrameCount: 0,
       sampleCount: 0,
       segmentation: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
+      occlusion: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
     });
   });
 
@@ -80,6 +81,26 @@ describe("PerformanceTracker", () => {
       expect(stats.avgMs).toBeCloseTo(90, 6);
       expect(stats.minMs).toBe(80);
       expect(stats.maxMs).toBe(100);
+    });
+  });
+
+  // M6.4 (docs/live-ar-realism-architecture.md §17) -- identical convention to
+  // segmentation timing above, kept as its own independent stat.
+  describe("occlusion timing (M6.4)", () => {
+    it("reports all-zero occlusion stats when no frame ever carried an occlusionMs", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ segmentationMs: 200 })); // segmentation ran, occlusion did not
+      expect(tracker.snapshot().occlusion).toEqual({ sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 });
+    });
+
+    it("tracks occlusion timing independently of segmentation timing", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ segmentationMs: 200, occlusionMs: 2 }));
+      tracker.record(sample({ segmentationMs: null, occlusionMs: 3 }));
+      const snapshot = tracker.snapshot();
+      expect(snapshot.segmentation.sampleCount).toBe(1);
+      expect(snapshot.occlusion.sampleCount).toBe(2);
+      expect(snapshot.occlusion.avgMs).toBeCloseTo(2.5, 6);
     });
   });
 });

@@ -129,6 +129,47 @@ export function drawNecklaceDebugOverlay(ctx: CanvasRenderingContext2D, snapshot
   drawDebugPoint(ctx, snapshot.finalAttachmentPx, "white", "JEWELLERY ATTACHMENT");
 }
 
+/** M6.4 (docs/live-ar-realism-architecture.md §6/§8/§17): draws one jewellery overlay
+ * onto an OFFSCREEN canvas -- never the main canvas directly -- then erases the
+ * occluding pixels (hair/qualifying-clothes, per occlusion.ts's documented rule) using
+ * `globalCompositeOperation: "destination-out"`, ISOLATED to that offscreen buffer.
+ *
+ * WHY ISOLATED, NOT APPLIED DIRECTLY TO THE MAIN CANVAS: this is the structural fix for
+ * the exact failure class that broke three earlier contact-shadow attempts (see
+ * README.md's "Known issues" and docs/live-ar-realism-architecture.md §9) --
+ * specifically, `globalCompositeOperation: "source-atop"` masking against the ENTIRE
+ * existing main-canvas content (the video frame, already drawn) rather than just the
+ * one sprite it was meant to affect, because it was applied on a shared canvas that
+ * already had other content in the same save/restore scope. Here, `destination-out`
+ * can only ever erase from THIS jewellery sprite -- nothing else is ever drawn onto
+ * `offscreenCtx` -- so that specific failure mode cannot recur by construction, not by
+ * being more careful this time.
+ *
+ * `offscreenCtx`'s canvas must already be sized to `outputWidthPx`/`outputHeightPx`
+ * (matching `ensureCanvasSize`'s existing "caller resizes, this function doesn't"
+ * convention) and is caller-owned/reused across frames -- this function never creates
+ * a canvas itself (Step 5's "avoid unnecessary allocations every frame"). Caller is
+ * responsible for then drawing this offscreen canvas onto the main canvas with plain
+ * `source-over` (e.g. `mainCtx.drawImage(offscreenCanvas, 0, 0)`). */
+export function drawOccludedJewelleryOverlay(
+  offscreenCtx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  transform: LiveTransform,
+  opacity: number,
+  eraseMaskSource: CanvasImageSource,
+  eraseMaskWidthPx: number,
+  eraseMaskHeightPx: number,
+  outputWidthPx: number,
+  outputHeightPx: number
+): void {
+  offscreenCtx.clearRect(0, 0, outputWidthPx, outputHeightPx);
+  drawJewelleryOverlay(offscreenCtx, image, transform, opacity);
+  offscreenCtx.save();
+  offscreenCtx.globalCompositeOperation = "destination-out";
+  offscreenCtx.drawImage(eraseMaskSource, 0, 0, eraseMaskWidthPx, eraseMaskHeightPx, 0, 0, outputWidthPx, outputHeightPx);
+  offscreenCtx.restore();
+}
+
 /** Draws a pre-built segmentation-mask canvas (see useLiveArSession.ts -- it owns and
  * reuses ONE scratch canvas across frames, per Step 5's "avoid unnecessary canvas
  * allocations every frame"; this function never creates one itself) onto the main

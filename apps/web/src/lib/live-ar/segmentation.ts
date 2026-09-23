@@ -126,6 +126,13 @@ export function runSegmentation(live: LiveSegmenter, video: HTMLVideoElement, ti
 export class SegmentationCadenceScheduler {
   private lastRunAtMs: number | null = null;
   private latestResult: SegmentationResult | null = null;
+  // M6.4 (docs/live-ar-realism-architecture.md §17): tracked SEPARATELY from
+  // lastRunAtMs above, which advances on every run attempt (successful or not) to
+  // drive the cadence timer. This field only advances when a run actually SUCCEEDS, so
+  // "how old is the mask I'm currently using" (getLatestAgeMs) stays correct even
+  // across one or more consecutive failed runs -- lastRunAtMs alone would understate
+  // staleness in that case.
+  private latestResultAtMs: number | null = null;
 
   constructor(private readonly intervalMs: number) {}
 
@@ -140,10 +147,13 @@ export class SegmentationCadenceScheduler {
   /** Records that a run happened at `nowMs` (successful or not -- a repeatedly-failing
    * segmenter is retried on the normal cadence, never spammed every frame just because
    * it keeps failing) and, when `result` is non-null, replaces the stale "latest"
-   * result with this fresh one. */
+   * result with this fresh one and records `nowMs` as when THAT result was captured. */
   recordRun(nowMs: number, result: SegmentationResult | null): void {
     this.lastRunAtMs = nowMs;
-    if (result !== null) this.latestResult = result;
+    if (result !== null) {
+      this.latestResult = result;
+      this.latestResultAtMs = nowMs;
+    }
   }
 
   /** The most recent successful result, or null if none has ever succeeded. Every
@@ -153,9 +163,18 @@ export class SegmentationCadenceScheduler {
     return this.latestResult;
   }
 
+  /** How old the current latest result is, in ms, as of `nowMs` -- null when no
+   * result has ever succeeded (nothing to be "old"). Callers (occlusion.ts) compare
+   * this against OCCLUSION_STALE_MASK_THRESHOLD_MS to decide whether to keep using it. */
+  getLatestAgeMs(nowMs: number): number | null {
+    if (this.latestResultAtMs === null) return null;
+    return nowMs - this.latestResultAtMs;
+  }
+
   reset(): void {
     this.lastRunAtMs = null;
     this.latestResult = null;
+    this.latestResultAtMs = null;
   }
 }
 

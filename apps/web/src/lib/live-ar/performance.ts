@@ -23,6 +23,12 @@ export interface FrameSample {
    * 0ms sample -- mixing those in would understate the real per-inference cost.
    * Optional so every pre-M6.3 caller/fixture keeps compiling and behaving unchanged. */
   segmentationMs?: number | null;
+  /** M6.4 (docs/live-ar-realism-architecture.md §17): this frame's occlusion
+   * compositing time (computing the occlusion mask + the destination-out erase draw),
+   * or `null`/`undefined` on a frame where no occlusion was attempted (no necklace
+   * overlay this frame, no fresh-enough mask, etc.) -- same "exclude, don't count as
+   * 0ms" convention as `segmentationMs` above. */
+  occlusionMs?: number | null;
 }
 
 /** Real min/median/average/p95/max over a set of real recorded timings -- Step 10's
@@ -52,6 +58,9 @@ export interface PerformanceSnapshot {
   /** M6.3: real segmentation inference timing, computed ONLY from frames where
    * segmentation actually ran (see FrameSample.segmentationMs above). */
   segmentation: TimingStats;
+  /** M6.4: real occlusion compositing timing, computed ONLY from frames where
+   * occlusion was actually attempted (see FrameSample.occlusionMs above). */
+  occlusion: TimingStats;
 }
 
 const EMPTY_SNAPSHOT: PerformanceSnapshot = {
@@ -64,6 +73,7 @@ const EMPTY_SNAPSHOT: PerformanceSnapshot = {
   droppedFrameCount: 0,
   sampleCount: 0,
   segmentation: EMPTY_TIMING_STATS,
+  occlusion: EMPTY_TIMING_STATS,
 };
 
 function average(values: number[]): number {
@@ -126,6 +136,9 @@ export class PerformanceTracker {
     const segmentationTimes = this.samples
       .map((s) => s.segmentationMs)
       .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+    const occlusionTimes = this.samples
+      .map((s) => s.occlusionMs)
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
     return {
       fps: avgFrameMs > 0 ? 1000 / avgFrameMs : 0,
       avgFrameMs,
@@ -136,6 +149,7 @@ export class PerformanceTracker {
       droppedFrameCount: this.samples.filter((s) => s.droppedFrame).length,
       sampleCount: this.samples.length,
       segmentation: computeTimingStats(segmentationTimes),
+      occlusion: computeTimingStats(occlusionTimes),
     };
   }
 
@@ -160,6 +174,26 @@ export function formatSegmentationDebugText(
     `avg=${stats.avgMs.toFixed(1)}ms p95=${stats.p95Ms.toFixed(1)}ms ` +
     `min=${stats.minMs.toFixed(1)}ms max=${stats.maxMs.toFixed(1)}ms`
   );
+}
+
+/** M6.4: plain-text rendering of the occlusion debug status/timing line, kept as its
+ * own simple function for the same reason `formatSegmentationDebugText` above is --
+ * one property access per argument at the call site, not a complex inline expression.
+ * `trackingStatus` is accepted as a plain string (not importing types.ts's
+ * `TrackingStatus` here) to keep this file's existing zero-dependency,
+ * framework-agnostic status (see this file's header docstring). */
+export function formatOcclusionDebugText(
+  info: { maskAgeMs: number | null; isStale: boolean; trackingStatus: string } | null,
+  stats: TimingStats
+): string {
+  if (info === null) return "Occlusion: n/a (no necklace overlay this frame)";
+  const ageText =
+    info.maskAgeMs === null ? "no mask yet" : `${info.maskAgeMs.toFixed(0)}ms old${info.isStale ? " (STALE -- occlusion disabled)" : ""}`;
+  const timingText =
+    stats.sampleCount > 0
+      ? ` / compositing: n=${stats.sampleCount} avg=${stats.avgMs.toFixed(2)}ms p95=${stats.p95Ms.toFixed(2)}ms`
+      : " / compositing: no samples yet";
+  return `Occlusion: tracking=${info.trackingStatus} mask age=${ageText}${timingText}`;
 }
 
 /** Formats a snapshot the way spec §23's example overlay does:

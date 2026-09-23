@@ -7,13 +7,25 @@ import { loadJewelleryAssetTexture } from "@/lib/live-ar/asset-cache";
 import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar/camera";
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
 import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
-import { planCategoryRenders } from "@/lib/live-ar/geometry";
-import { NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH, SEGMENTATION_INTERVAL_MS_DEFAULT } from "@/lib/live-ar/constants";
+import { computeTransformedBoundingBox, planCategoryRenders } from "@/lib/live-ar/geometry";
+import {
+  NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH,
+  OCCLUSION_STALE_MASK_THRESHOLD_MS,
+  SEGMENTATION_INTERVAL_MS_DEFAULT,
+} from "@/lib/live-ar/constants";
+import {
+  buildOcclusionDebugRgba,
+  buildOcclusionEraseRgba,
+  computeNecklaceOcclusionMask,
+  isMaskStale,
+  toMaskSpaceRegion,
+} from "@/lib/live-ar/occlusion";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
 import {
   drawJewelleryOverlay,
   drawNecklaceDebugOverlay,
+  drawOccludedJewelleryOverlay,
   drawSegmentationDebugOverlay,
   ensureCanvasSize,
   renderLiveFrame,
@@ -94,6 +106,14 @@ export interface UseLiveArSessionArgs {
    * above `useLiveArSession`'s render loop) so real timing data doesn't depend on this
    * panel happening to be open. */
   showSegmentationDebug?: boolean;
+  /** M6.4 (docs/live-ar-realism-architecture.md §17): draws the occlusion debug
+   * overlay (the final per-pixel occlusion decision for the current necklace, plus a
+   * mask-age/tracking-state text readout). Independent of showSegmentationDebug above.
+   * Never affects jewellery placement/compositing itself -- occlusion COMPOSITING
+   * (unlike its debug visualization) is always active for necklace whenever a
+   * fresh-enough mask exists, regardless of this flag; this flag only controls whether
+   * you can SEE the decision being made. */
+  showOcclusionDebug?: boolean;
 }
 
 export interface UseLiveArSessionResult {
@@ -118,6 +138,12 @@ export interface UseLiveArSessionResult {
    * jewellery rendering continue exactly as before regardless of this status. */
   segmentationStatus: "idle" | "loading" | "ready" | "error";
   segmentationError: string | null;
+  /** M6.4 (docs/live-ar-realism-architecture.md §17): throttled diagnostic info for the
+   * occlusion debug panel -- mask age, staleness, and the tracking state occlusion
+   * decisions were made against on the frame this snapshot was taken. Null whenever
+   * there is no necklace overlay to report on this frame (wrong category, no transform,
+   * etc.) -- never a stale/leftover value from a different frame's necklace. */
+  occlusionDebugInfo: { maskAgeMs: number | null; isStale: boolean; trackingStatus: TrackingStatus } | null;
   /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
    * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
    * canvas isn't ready yet. */
@@ -136,6 +162,7 @@ export function useLiveArSession({
   debugNeckFractionOverride = null,
   debugNeckHorizontalOffsetOverride = null,
   showSegmentationDebug = false,
+  showOcclusionDebug = false,
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -149,6 +176,14 @@ export function useLiveArSession({
   // resized only when the mask's own native resolution changes -- never allocated
   // fresh per frame (Step 5).
   const segmentationDebugCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // M6.4 -- reused offscreen buffers, never allocated per frame (Step 5). scratchRef
+  // holds the necklace sprite + erase composite (video-sized); eraseMaskRef holds the
+  // erase RGBA pattern at the segmentation mask's own native resolution;
+  // debugCanvasRef holds the colorized "what's occluding" visualization, also at mask
+  // resolution, only ever drawn when showOcclusionDebug is on.
+  const occlusionScratchCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const occlusionEraseCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const occlusionDebugCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const assetGeometryRef = useRef<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null>(null);
   // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
   // fresh every frame inside the render loop (never restarts it), updated by the
@@ -171,13 +206,17 @@ export function useLiveArSession({
   const [debugSnapshot, setDebugSnapshot] = useState<NecklaceDebugSnapshot | null>(null);
   const [segmentationStatus, setSegmentationStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [segmentationError, setSegmentationError] = useState<string | null>(null);
+  const [occlusionDebugInfo, setOcclusionDebugInfo] = useState<UseLiveArSessionResult["occlusionDebugInfo"]>(null);
   const lastDebugStateUpdateAtMsRef = useRef<number>(0);
+  const lastOcclusionDebugStateUpdateAtMsRef = useRef<number>(0);
   const debugEnabledRef = useRef(debugEnabled);
   debugEnabledRef.current = debugEnabled;
   // Read fresh every frame -- toggling the debug checkbox must not tear down/restart
   // the render loop (same rationale as debugEnabledRef above).
   const showSegmentationDebugRef = useRef(showSegmentationDebug);
   showSegmentationDebugRef.current = showSegmentationDebug;
+  const showOcclusionDebugRef = useRef(showOcclusionDebug);
+  showOcclusionDebugRef.current = showOcclusionDebug;
   // Read fresh every frame from a ref (not render-loop-effect state) so dragging the
   // calibration slider doesn't tear down and restart tracking/smoothing state each tick.
   const debugNeckFractionOverrideRef = useRef(debugNeckFractionOverride);
@@ -448,10 +487,139 @@ export function useLiveArSession({
       }
       const t2 = performance.now();
 
-      renderLiveFrame(ctx, { video, videoWidthPx, videoHeightPx }, null);
-      for (const overlay of overlays) {
-        drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity);
+      // M6.4 (docs/live-ar-realism-architecture.md §6/§7/§17): segmentation-aware
+      // necklace occlusion. Applies ONLY to the primary necklace overlay (overlays[0]
+      // when category === "necklace" -- the necklace slot is always constructed first
+      // in the block above, before any additional layered items are pushed).
+      // Earrings and additional layered neck items are intentionally out of scope for
+      // this milestone (Step 4 of the request that produced it: "start with
+      // necklace... do not expand to every jewellery category yet").
+      //
+      // Step 14's tracking-loss requirement needs no extra code here: `overlays[0]`
+      // simply does not exist on a frame where the necklace's own tracking is LOST
+      // (see the flatMap above -- `if (result.transform === null ...) return []`), so
+      // this whole block is naturally skipped then, exactly as if occlusion were
+      // "disabled" -- there is nothing to occlude.
+      let occlusionMs: number | null = null;
+      let occludedNecklaceCanvas: HTMLCanvasElement | null = null;
+      if (category === "necklace" && loaded && overlays.length > 0) {
+        const necklaceOverlay = overlays[0];
+        const maskAgeMs = segmentationSchedulerRef.current.getLatestAgeMs(frameStartMs);
+        const stale = isMaskStale(maskAgeMs, OCCLUSION_STALE_MASK_THRESHOLD_MS);
+        const debugInfo = { maskAgeMs, isStale: stale, trackingStatus: primaryStatus };
+        if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
+          lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
+          setOcclusionDebugInfo(debugInfo);
+        }
+
+        const latestMask = segmentationSchedulerRef.current.getLatest();
+        // Step 13: a stale or missing mask falls back to NO occlusion (the necklace
+        // draws exactly as it did before M6.4) rather than trusting old data or
+        // hiding the necklace outright.
+        if (!stale && latestMask) {
+          const occStart = performance.now();
+          const bboxPx = computeTransformedBoundingBox(necklaceOverlay.transform, loaded.geometry);
+          const region = toMaskSpaceRegion(
+            bboxPx,
+            necklaceOverlay.transform.anchorPx.y,
+            videoWidthPx,
+            videoHeightPx,
+            latestMask.maskWidthPx,
+            latestMask.maskHeightPx
+          );
+          const occlusionMask = computeNecklaceOcclusionMask(
+            latestMask.categoryData,
+            latestMask.maskWidthPx,
+            latestMask.maskHeightPx,
+            region
+          );
+
+          if (!occlusionEraseCanvasRef.current) occlusionEraseCanvasRef.current = document.createElement("canvas");
+          const eraseCanvas = occlusionEraseCanvasRef.current;
+          if (eraseCanvas.width !== latestMask.maskWidthPx || eraseCanvas.height !== latestMask.maskHeightPx) {
+            eraseCanvas.width = latestMask.maskWidthPx;
+            eraseCanvas.height = latestMask.maskHeightPx;
+          }
+          const eraseCtx = eraseCanvas.getContext("2d");
+
+          if (!occlusionScratchCanvasRef.current) occlusionScratchCanvasRef.current = document.createElement("canvas");
+          const scratchCanvas = occlusionScratchCanvasRef.current;
+          if (scratchCanvas.width !== videoWidthPx || scratchCanvas.height !== videoHeightPx) {
+            scratchCanvas.width = videoWidthPx;
+            scratchCanvas.height = videoHeightPx;
+          }
+          const scratchCtx = scratchCanvas.getContext("2d");
+
+          if (eraseCtx && scratchCtx) {
+            const eraseRgba = buildOcclusionEraseRgba(occlusionMask);
+            eraseCtx.putImageData(
+              new ImageData(eraseRgba as Uint8ClampedArray<ArrayBuffer>, latestMask.maskWidthPx, latestMask.maskHeightPx),
+              0,
+              0
+            );
+            drawOccludedJewelleryOverlay(
+              scratchCtx,
+              necklaceOverlay.image,
+              necklaceOverlay.transform,
+              necklaceOverlay.opacity,
+              eraseCanvas,
+              latestMask.maskWidthPx,
+              latestMask.maskHeightPx,
+              videoWidthPx,
+              videoHeightPx
+            );
+            occludedNecklaceCanvas = scratchCanvas;
+
+            // Debug-only (Step 15/16): colorize the SAME occlusion decision just made,
+            // for the "final jewellery visibility mask" panel -- never a re-derivation.
+            if (showOcclusionDebugRef.current) {
+              if (!occlusionDebugCanvasRef.current) occlusionDebugCanvasRef.current = document.createElement("canvas");
+              const debugCanvas = occlusionDebugCanvasRef.current;
+              if (debugCanvas.width !== latestMask.maskWidthPx || debugCanvas.height !== latestMask.maskHeightPx) {
+                debugCanvas.width = latestMask.maskWidthPx;
+                debugCanvas.height = latestMask.maskHeightPx;
+              }
+              const debugCtx = debugCanvas.getContext("2d");
+              if (debugCtx) {
+                const debugRgba = buildOcclusionDebugRgba(occlusionMask);
+                debugCtx.putImageData(
+                  new ImageData(debugRgba as Uint8ClampedArray<ArrayBuffer>, latestMask.maskWidthPx, latestMask.maskHeightPx),
+                  0,
+                  0
+                );
+              }
+            }
+          }
+          occlusionMs = performance.now() - occStart;
+        }
+      } else {
+        // Wrong category / no necklace overlay this frame -- clear promptly rather
+        // than leaving a previous frame's stale info displayed (this transition is
+        // rare -- category switch, tracking loss -- so skipping the usual throttle
+        // here is not a performance concern). Unconditional: React's own setState
+        // bails out without a re-render when the value is already null, so there is
+        // no need to read the current state value inside this closure to decide
+        // whether to call it (which would need `occlusionDebugInfo` in this effect's
+        // dependency array, tearing down/restarting the render loop on every change).
+        setOcclusionDebugInfo(null);
       }
+      // Marks the actual start of rendering, AFTER occlusion's own computation --
+      // otherwise occlusionMs's time would be silently double-counted inside renderMs
+      // below (t2 was captured before occlusion ran, t3 is captured after rendering).
+      const t2Render = performance.now();
+
+      renderLiveFrame(ctx, { video, videoWidthPx, videoHeightPx }, null);
+      overlays.forEach((overlay, index) => {
+        // The primary necklace overlay is drawn from the occlusion-composited
+        // offscreen canvas when occlusion actually ran this frame; every other
+        // overlay (earrings, additional layered neck items, or the necklace itself
+        // when occlusion did NOT run) draws exactly as it did before M6.4.
+        if (index === 0 && occludedNecklaceCanvas) {
+          ctx.drawImage(occludedNecklaceCanvas, 0, 0);
+        } else {
+          drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity);
+        }
+      });
       const t3 = performance.now();
 
       // Debug overlay: uses the SAME actually-rendered (post-smoothing) transform just
@@ -509,14 +677,24 @@ export function useLiveArSession({
         }
       }
 
+      // M6.4 debug-only visualization (Step 15/16): the FINAL occlusion decision for
+      // the current necklace (distinct from the raw segmentation categories drawn
+      // above) -- only populated this frame when occlusion actually ran. Drawn in the
+      // same unmirrored space as everything else, no independent mirroring added.
+      if (showOcclusionDebugRef.current && occlusionDebugCanvasRef.current && occludedNecklaceCanvas) {
+        const debugCanvas = occlusionDebugCanvasRef.current;
+        drawSegmentationDebugOverlay(ctx, debugCanvas, debugCanvas.width, debugCanvas.height, videoWidthPx, videoHeightPx);
+      }
+
       const totalFrameMs = previousFrameAtMs === null ? t3 - t0 : frameStartMs - previousFrameAtMs;
       performanceTrackerRef.current.record({
         totalFrameMs,
         trackingMs: t1 - t0,
         geometryMs: t2 - t1,
-        renderMs: t3 - t2,
+        renderMs: t3 - t2Render,
         droppedFrame: totalFrameMs > DROPPED_FRAME_THRESHOLD_MS,
         segmentationMs,
+        occlusionMs,
       });
 
       setTrackingStatus(primaryStatus);
@@ -560,6 +738,7 @@ export function useLiveArSession({
     debugSnapshot,
     segmentationStatus,
     segmentationError,
+    occlusionDebugInfo,
     captureFrame,
   };
 }

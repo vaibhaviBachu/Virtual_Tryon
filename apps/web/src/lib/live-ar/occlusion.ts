@@ -1,0 +1,158 @@
+/**
+ * Segmentation-aware 2D necklace occlusion -- M6.4
+ * (docs/live-ar-realism-architecture.md §6/§7/§17). This is explicitly NOT 3D
+ * depth-aware occlusion: it decides, per pixel of the segmentation mask, whether that
+ * pixel's category should be drawn IN FRONT OF the necklace, using one documented rule
+ * -- nothing here reasons about real depth/distance.
+ *
+ * DOCUMENTED OCCLUSION RULE (necklace only -- this milestone does not touch earrings):
+ * - HAIR occludes the necklace ANYWHERE within the necklace's own rendered region. This
+ *   is the headline physical case (Step 21 of the request that produced this
+ *   milestone): hair commonly falls in front of a worn necklace, and this must be
+ *   visibly true or the milestone has not worked, regardless of what automated tests
+ *   say.
+ * - CLOTHES occludes the necklace ONLY at or above the necklace's own neck-attachment
+ *   point (the same `transform.anchorPx.y` computed by geometry.ts's
+ *   `computeNecklaceAnchor` -- no new geometry, reusing the existing anchor). Physical
+ *   reasoning: a collar can ride up and cover the very top of a necklace near the neck,
+ *   but a necklace normally rests ON TOP of clothing everywhere below that -- occluding
+ *   the necklace's whole lower/chest portion just because a pixel there is classified
+ *   "clothes" would make the necklace vanish incorrectly, which the request producing
+ *   this milestone explicitly warned against ("do NOT simply hide the entire necklace
+ *   wherever class = clothes").
+ * - BACKGROUND, BODY-SKIN, FACE-SKIN, and OTHERS never occlude. A worn necklace sits in
+ *   front of skin and background by definition; letting those categories hide it would
+ *   be treating a segmentation misclassification as ground truth, not modeling a real
+ *   occlusion case.
+ *
+ * This module is deliberately Canvas/DOM-free -- every function here operates on plain
+ * typed arrays and numbers, so it is fully unit-testable without the real
+ * `getContext("2d")`/`ImageData` this project's jsdom test environment does not
+ * implement (verified directly in M6.3, not assumed). The actual on-screen compositing
+ * (turning this module's output into pixels) lives in renderer.ts, mirroring the
+ * existing project convention of keeping pure decision logic separate from Canvas calls.
+ */
+
+const HAIR_CATEGORY = 1;
+const CLOTHES_CATEGORY = 4;
+
+/** A jewellery item's rendered region and its neck-attachment Y, all expressed in the
+ * SAME pixel space as the segmentation mask itself (maskWidthPx x maskHeightPx) -- see
+ * `toMaskSpaceRegion` below for converting from canvas/video pixel space, which is the
+ * space every other Live AR module (geometry.ts, renderer.ts) actually works in. */
+export interface OcclusionRegion {
+  leftPx: number;
+  topPx: number;
+  rightPx: number;
+  bottomPx: number;
+  /** Clothing only occludes at/above this Y (smaller y = higher, per this project's
+   * top-left-origin convention -- see types.ts) -- see the file docstring's clothing
+   * rule for the physical reasoning. */
+  attachmentYPx: number;
+}
+
+/** Converts a jewellery region already expressed in CANVAS/video pixel space (e.g.
+ * geometry.ts's `computeTransformedBoundingBox` output, and a transform's own
+ * `anchorPx.y`) into the segmentation mask's own native pixel space. The mask is
+ * produced at its OWN resolution (e.g. 256x256), not the video's (see segmentation.ts's
+ * file docstring) -- this is a plain per-axis scale, matching the same stretch mapping
+ * `drawSegmentationDebugOverlay` already uses and that M6.3's real-device check found
+ * "no obvious global coordinate/mirroring displacement" for. If the mask's aspect ratio
+ * genuinely differs from the video's, this per-axis (not uniform) scale still maps
+ * bounds correctly -- it never assumes a single shared scale factor for both axes. */
+export function toMaskSpaceRegion(
+  canvasBboxLTRB: readonly [number, number, number, number],
+  attachmentYCanvasPx: number,
+  videoWidthPx: number,
+  videoHeightPx: number,
+  maskWidthPx: number,
+  maskHeightPx: number
+): OcclusionRegion {
+  const scaleX = maskWidthPx / videoWidthPx;
+  const scaleY = maskHeightPx / videoHeightPx;
+  const [left, top, right, bottom] = canvasBboxLTRB;
+  return {
+    leftPx: left * scaleX,
+    topPx: top * scaleY,
+    rightPx: right * scaleX,
+    bottomPx: bottom * scaleY,
+    attachmentYPx: attachmentYCanvasPx * scaleY,
+  };
+}
+
+/**
+ * Pure decision function: given a segmentation category mask and one necklace's
+ * rendered region (already in the mask's own coordinate space -- see
+ * `toMaskSpaceRegion`), returns a same-size Uint8ClampedArray, one byte per mask pixel:
+ * 255 where that pixel should occlude the necklace (drawn in front of it), 0 everywhere
+ * else -- including every pixel outside `region` (nothing outside the necklace's own
+ * footprint can occlude it, there being nothing there to occlude). See the file
+ * docstring for the exact, documented rule this implements.
+ */
+export function computeNecklaceOcclusionMask(
+  categoryData: Uint8Array,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  region: OcclusionRegion
+): Uint8ClampedArray {
+  const occlusion = new Uint8ClampedArray(maskWidthPx * maskHeightPx);
+  const left = Math.max(0, Math.floor(region.leftPx));
+  const top = Math.max(0, Math.floor(region.topPx));
+  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
+  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  for (let y = top; y < bottom; y++) {
+    const rowOffset = y * maskWidthPx;
+    for (let x = left; x < right; x++) {
+      const category = categoryData[rowOffset + x];
+      const occludes = category === HAIR_CATEGORY || (category === CLOTHES_CATEGORY && y <= region.attachmentYPx);
+      occlusion[rowOffset + x] = occludes ? 255 : 0;
+    }
+  }
+  return occlusion;
+}
+
+/** Whether a mask of the given age should still be trusted for occlusion (Step 13).
+ * A trivial comparison, but named/exported so the threshold and the decision it drives
+ * are never re-derived ad hoc at a call site. */
+export function isMaskStale(ageMs: number | null, thresholdMs: number): boolean {
+  return ageMs === null || ageMs > thresholdMs;
+}
+
+/** Converts the pure occlusion decision into an RGBA erase-pattern buffer for the REAL
+ * (non-debug) compositing step: alpha = 255 wherever occluding (erase the jewellery
+ * there), 0 elsewhere. RGB is irrelevant for a `destination-out` erase (only the source
+ * alpha channel matters) and is left at 0. Kept separate from
+ * `buildOcclusionDebugRgba` below -- one produces the actual erase mask renderer.ts
+ * applies to the jewellery layer, the other is a human-readable diagnostic visual;
+ * conflating them risked the debug view silently becoming load-bearing. */
+export function buildOcclusionEraseRgba(occlusionMask: Uint8ClampedArray): Uint8ClampedArray {
+  const rgba = new Uint8ClampedArray(occlusionMask.length * 4);
+  for (let i = 0; i < occlusionMask.length; i++) {
+    rgba[i * 4 + 3] = occlusionMask[i];
+  }
+  return rgba;
+}
+
+/** Debug-only visualization (Step 15/16): colors the FINAL occlusion decision itself
+ * (not the raw segmentation categories -- segmentation.ts's `buildSegmentationDebugRgba`
+ * already covers that) so a real device tester can see exactly which pixels of a given
+ * necklace's own region are being treated as "in front of the jewellery" versus "the
+ * jewellery shows through," as opposed to inferring it indirectly from the raw category
+ * colors. Bright, single, deliberately different color from every category color
+ * segmentation.ts uses, precisely so the two debug layers are never confused with each
+ * other when both are visible at once. */
+const OCCLUDING_DEBUG_COLOR: readonly [number, number, number] = [255, 0, 60];
+const OCCLUDING_DEBUG_ALPHA = 180;
+
+export function buildOcclusionDebugRgba(occlusionMask: Uint8ClampedArray): Uint8ClampedArray {
+  const rgba = new Uint8ClampedArray(occlusionMask.length * 4);
+  for (let i = 0; i < occlusionMask.length; i++) {
+    const offset = i * 4;
+    if (occlusionMask[i] === 0) continue; // stays fully transparent (already zero-initialized)
+    rgba[offset] = OCCLUDING_DEBUG_COLOR[0];
+    rgba[offset + 1] = OCCLUDING_DEBUG_COLOR[1];
+    rgba[offset + 2] = OCCLUDING_DEBUG_COLOR[2];
+    rgba[offset + 3] = OCCLUDING_DEBUG_ALPHA;
+  }
+  return rgba;
+}

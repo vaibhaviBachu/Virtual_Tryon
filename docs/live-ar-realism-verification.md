@@ -331,34 +331,39 @@ What the +5 actually are, checked by hand rather than left as a bare number:
   limitation) was judged not worth further time against a proof-of-concept milestone
   whose own stop condition is "wait for review," but is flagged here rather than hidden.
 
-## Real device (Steps 13/21/22) — NOT MEASURED
+## Real device (Steps 13/21/22) — UPDATE 2026-09-24: now measured
 
-- Device: **not tested**
-- Browser: **not tested**
-- OS: **not tested**
-- Camera resolution: **not tested**
-- Segmentation inference average/median/p95: **not measured**
-- Overall live FPS average/observed range: **not measured**
-- Mask alignment quality: **not observed**
-- Hair segmentation quality: **not observed**
-- Clothing segmentation quality: **not observed**
-- Memory/lifecycle behavior over a long real session: **not observed**
+The gaps below were left open when this section was first written (this sandbox has no
+camera and could not collect them itself) and have since been filled in from a real
+device/browser session, reported back after this milestone shipped:
 
-This is not an oversight — it is the honest boundary Step 13 itself describes ("the
-development sandbox cannot provide the final camera verification"). Every field above
-requires you (or whoever has a real device) to open `/try-on/live`, enable "Show
-segmentation debug," and read the on-screen status/timing line and the colorized mask
-overlay against your own face/hair/clothing, then report back what was actually seen.
+- Device/browser/OS/camera resolution: not itemized in the report received; the
+  qualitative and timing observations below are from a real session, not this sandbox.
+- Segmentation inference timing — **n = 31, average ≈ 234.5ms, p95 ≈ 276.5ms,
+  min ≈ 199.2ms, max ≈ 288.0ms**, at the ~500ms cadence configured
+  (`SEGMENTATION_INTERVAL_MS_DEFAULT`). These are the real numbers M6.4's
+  `OCCLUSION_STALE_MASK_THRESHOLD_MS` reasoning is now grounded in (see that constant's
+  own comment in constants.ts) — not Google's benchmark, not an estimate.
+- Overall live FPS: not separately reported as a number.
+- Mask alignment quality: **"aligns reasonably well with the camera image... no
+  obvious global coordinate/mirroring displacement was observed."**
+- Hair segmentation quality: **"visibly separated."**
+- Clothing segmentation quality: **"visible."**
+- Face/skin segmentation: **"visible."**
+- Memory/lifecycle behavior over a long real session: still not specifically observed.
 
-## Whether the result is acceptable for M6.4 (Step 19)
+**Conclusion drawn from this real data**: the mask is suitable for a first occlusion
+experiment (M6.4, below) — this is the actual basis M6.4 was approved on, not an
+assumption.
 
-**Cannot be determined from this session alone.** Code correctness is verified (tests,
-types, build). Whether the real inference cost, mask alignment, and mask quality are
-good enough to build occlusion on top of is exactly the open question M6.4 is gated on,
-and answering it requires the real-device data this section could not collect. Per the
-request's own Step 21, if a real device later shows unacceptable performance, that
-should be reported as "NOT ACCEPTABLE FOR CURRENT DEVICE/CONFIGURATION" with the actual
-numbers and the fallback options below — not hidden.
+## Whether the result was acceptable for M6.4 (Step 19)
+
+**Yes, conditionally accepted** based on the real-device observations above: alignment,
+hair separation, and clothing/skin separation were all judged good enough to build a
+first occlusion experiment on top of, while explicitly not treating the ~234.5ms average
+inference time as acceptable for per-frame use (it isn't, and M6.4 does not attempt
+that — see its own section below for how the periodic-cadence-plus-mask-reuse
+architecture keeps segmentation off the render loop's critical path).
 
 ## Fallback options if real-device performance is unacceptable (Step 15 — documented, not implemented)
 
@@ -401,3 +406,209 @@ See `git log` — "feat(live-ar): add multiclass segmentation proof of concept".
 
 - [Image segmentation guide — Google AI Edge](https://developers.google.com/edge/mediapipe/solutions/vision/image_segmenter) — category list, model hosting URL, Pixel 6 CPU/GPU latency benchmark.
 - [Image segmenter Web/JS guide — Google AI Edge](https://developers.google.com/edge/mediapipe/solutions/vision/image_segmenter/web_js) — confirms `modelAssetPath` loads a raw `.tflite` directly (the pattern this milestone's model URL follows) and `outputCategoryMask`/`outputConfidenceMasks` option names.
+
+---
+
+# M6.4 Verification — Segmentation-Aware 2D Necklace Occlusion
+
+**Scope: M6.4, necklace only.** Implements the first real occlusion pipeline: hair (and,
+region-aware, clothing) can now draw in front of the necklace instead of the necklace
+always rendering on top of everything. **This is explicitly 2D, segmentation-based
+occlusion, not 3D depth-aware occlusion** — nothing here reasons about real depth or
+distance; it only asks "what category is this pixel classified as" and applies one
+documented rule. Earrings, shadows, lighting, materials, WebGL, and generative AI are
+all untouched — none of those were in scope and none were added.
+
+## Occlusion architecture
+
+```
+CAMERA
+  |
+BODY SEGMENTATION (M6.3 -- unchanged, still periodic/~500ms, mask reused between updates)
+  |
+JEWELLERY GEOMETRY (unchanged -- necklace anchor/scale/rotation are byte-identical to before M6.4)
+  |
+OCCLUSION COMPOSITING (NEW -- occlusion.ts's pure decision + renderer.ts's isolated erase draw)
+  |
+FINAL CAMERA IMAGE
+```
+
+The render loop NEVER blocks waiting for segmentation (Step 3) -- it reads whatever
+`SegmentationCadenceScheduler.getLatest()` currently holds (a fresh mask, or one up to
+`OCCLUSION_STALE_MASK_THRESHOLD_MS` old) and proceeds immediately. Tracking and geometry
+run at the full RAF rate exactly as before; only the segmentation model itself runs on
+its own periodic cadence, unchanged from M6.3.
+
+**The documented occlusion rule** (see `occlusion.ts`'s file docstring for the full
+physical reasoning): HAIR occludes the necklace anywhere in its rendered region; CLOTHES
+occludes only at or above the necklace's own neck-attachment point (a collar can ride up
+over the top of a necklace, but a necklace normally rests on top of clothing on the
+chest -- this is deliberately NOT the blanket "class=clothes hides everything" rule the
+request explicitly warned against); BACKGROUND, BODY-SKIN, FACE-SKIN, and OTHERS never
+occlude.
+
+**Compositing technique**: the necklace sprite is drawn onto an isolated OFFSCREEN
+canvas (never the main canvas), then erased with `globalCompositeOperation:
+"destination-out"` using a scaled-up erase pattern built from the occlusion decision.
+This is the structural fix for the exact failure class that broke three earlier
+contact-shadow attempts (a compositing-mode change applied directly to the shared main
+canvas, masking against everything already drawn there, not just one sprite) --
+`destination-out` here can only ever erase from this one offscreen buffer, because
+nothing else is ever drawn onto it. See `renderer.ts`'s `drawOccludedJewelleryOverlay`
+docstring for the full account.
+
+## Mask coordinate mapping
+
+The necklace's rendered bounding box (`geometry.ts`'s new `computeTransformedBoundingBox`,
+extracted from debug.ts's pre-existing, already-tested `finalVisibleBboxPx` logic with no
+behavior change) and its neck-attachment Y are converted from canvas/video pixel space
+into the segmentation mask's own native resolution via `occlusion.ts`'s
+`toMaskSpaceRegion` -- a plain PER-AXIS scale (not a single uniform factor), so a
+mask/video aspect-ratio mismatch is still mapped correctly on each axis independently.
+This reuses the exact stretch-mapping convention `drawSegmentationDebugOverlay` (M6.3)
+already used and that the real-device check reported as showing "no obvious global
+coordinate/mirroring displacement." No independent mirroring was added anywhere in this
+module -- it works entirely in the same unmirrored space tracking/geometry already use.
+
+## Hair occlusion result
+
+**Automated**: `computeNecklaceOcclusionMask`'s tests prove hair occludes anywhere in the
+necklace's region, including well below the attachment point (see occlusion.test.ts).
+**Real-device**: not yet re-tested against this specific M6.4 build (see Step 19's visual
+test below, still pending your report) — this is the single most important thing to
+verify next; M6.4 is not "working" by this project's own standard unless hair visibly
+covers the necklace on a real camera, regardless of what the automated tests say.
+
+## Clothing/body occlusion result
+
+**Automated**: tests prove clothing occludes only at/above the attachment point, never
+below it (occlusion.test.ts's "clothes occludes only at or above the attachment point"
+case), and that skin/others never occlude. **Real-device**: not yet re-tested.
+
+## Background behavior
+
+**Automated**: an all-background region produces zero occlusion (tested explicitly, twice
+-- once as its own case, once as the "empty segmentation" case). Background can never
+hide the necklace by construction, not by a runtime check that could be bypassed.
+
+## Mask age behavior
+
+`SegmentationCadenceScheduler.getLatestAgeMs()` (new) tracks how old the current mask is,
+separately from the cadence timer itself (so a failed inference attempt doesn't reset the
+age clock — the age is measured from the last SUCCESSFUL result). `occlusion.ts`'s
+`isMaskStale()` compares this against `OCCLUSION_STALE_MASK_THRESHOLD_MS = 2000` (see
+constants.ts for the full derivation: ~2.5x the healthy worst-case gap implied by M6.3's
+real numbers, 500ms cadence + 276.5ms p95 inference ≈ 777ms). A stale or missing mask
+falls back to **no occlusion** — the necklace renders exactly as it did before M6.4 —
+never an ancient mask, never a hidden necklace. Exposed in the occlusion debug panel as
+"mask age=Nms old" (see Step 15 below).
+
+## Tracking-loss behavior
+
+No new code was needed: occlusion only runs against `overlays[0]` when a necklace overlay
+actually exists that frame, and the existing `TrackingStateMachine` already returns no
+overlay at all when tracking is LOST (`result.transform === null` → the slot contributes
+nothing to `overlays`). During DEGRADED, the coasted transform still gets occlusion
+applied, which is the correct behavior — the necklace is still visibly rendering, just
+smoothed/held, so it should still be correctly occluded.
+
+## Automated tests (Step 17)
+
+37 new tests, all passing. `occlusion.test.ts` (24): every documented rule case (hair
+anywhere, clothes above/below attachment, skin/background/others never occlude), fully
+opaque/transparent/partial/mixed regions, out-of-bounds and invalid input handled without
+throwing, coordinate conversion including a genuine aspect-ratio mismatch, the
+no-mirroring invariant, stale/fresh mask thresholds (including the exact boundary), and
+both RGBA builders (erase pattern and debug visualization). `segmentation.test.ts` (+5):
+`getLatestAgeMs`'s full behavior including the "doesn't reset on a failed run" case.
+`performance.test.ts` (+2): occlusion timing tracked independently of segmentation timing.
+`renderer.test.ts` (+2): `drawOccludedJewelleryOverlay`'s exact call sequence and
+composite-mode-at-call-time (jewellery draws with normal compositing, the erase step and
+only the erase step uses `destination-out`), including the zero-opacity case.
+`geometry.test.ts` (+4): the relocated `applyLiveTransformToPoint`/
+`computeTransformedBoundingBox` functions, tested directly rather than only indirectly
+through debug.ts. Explicitly NOT tested (by design, matching this project's own
+established convention — see tracking.test.ts/segmentation.test.ts's docstrings):
+tracking LOST/DEGRADED as *occlusion* test cases specifically, since that behavior falls
+out of the pre-existing `TrackingStateMachine` with zero new occlusion-specific code (see
+"Tracking-loss behavior" above) — there is nothing occlusion-specific to unit-test there
+that isn't already covered by tracking-state.test.ts's own existing suite.
+
+## Full test count
+
+Before M6.4 (end of M6.3): 214 frontend tests. After M6.4: **251** (214 + 37 new). Same
+pre-existing flake as every prior milestone (`JewelleryCreateForm.test.tsx`, unrelated to
+Live AR, passes in isolation) — no new failures.
+
+## Build
+
+`npm run build`: succeeds, all 7 routes compile including `/try-on/live`. `npx tsc
+--noEmit`: clean.
+
+## Lint
+
+Before M6.4: 58 problems (34 errors, 24 warnings). After M6.4: **61 problems (37 errors,
+24 warnings)** — +3 errors, **0 net new warnings** (one new `react-hooks/exhaustive-deps`
+warning was caught and fixed directly, by removing a redundant state read inside the RAF
+closure and relying on React's own no-op bailout for a repeated `setState(null)`, instead
+of adding the value to the effect's dependency array — which would have torn down and
+restarted the whole render loop on every debug-info change). The +3 errors are the same
+already-documented, already-tolerated pattern from M6.3's own lint section: one more
+`react-hooks/refs` "ref updated during render" on the new `showOcclusionDebugRef.current =
+showOcclusionDebug` line (matching `showSegmentationDebugRef`/`debugEnabledRef`/etc.
+exactly), and two more "cannot access ref value during render" flags on the two
+property-chain arguments passed to the new `formatOcclusionDebugText(...)` call —
+structurally identical to M6.3's `formatSegmentationDebugText(...)` collateral, not a new
+category of issue. `next lint` exits 0 either way.
+
+## Real-device observations (Steps 19/21)
+
+**Not yet performed against this specific M6.4 build.** Per Step 19 of the request: use
+a real camera, select a necklace, enable both "Show segmentation debug" and "Show
+occlusion debug," and check hair-away-from-necklace (should stay visible),
+hair-crossing-necklace (hair should appear in front), head/body movement (occlusion
+should track), fast movement (observe stale-mask fallback), and that disabling both
+toggles returns the normal UI. **This is the single most important unresolved item** —
+until it's done, M6.4's real-world success is unknown regardless of what the automated
+suite says.
+
+## Actual occlusion/compositing timing and FPS
+
+**Not yet measured on a real device for this build.** The debug panel (`formatOcclusionDebugText`,
+visible when "Show occlusion debug" is on) reports real `computeTimingStats` numbers
+(n/avg/p95) for the compositing step the moment it runs on your device — read it directly
+rather than estimating.
+
+## Known failure cases (reasoned, not yet device-confirmed)
+
+- A necklace whose attachment point sits unusually high or low relative to where a real
+  collar naturally falls could make the clothing rule look wrong in either direction
+  (occluding too much or too little) — the rule is a documented approximation using the
+  existing anchor, not a learned or per-garment-calibrated boundary.
+- Fast head/body movement during the ~500-777ms window between mask updates could show a
+  visibly lagging occlusion boundary before falling back to no-occlusion past the stale
+  threshold — exactly what Step 19's test E asks you to observe and report.
+- Segmentation misclassification at hair/clothing boundaries (a real, unmeasured
+  uncertainty carried over from M6.3) would show up here as incorrect occlusion at that
+  boundary, not as a bug in this module's own logic.
+
+## Whether M6.4 is visually convincing
+
+**Cannot be claimed from this session.** Automated tests confirm the decision logic
+implements the documented rule correctly and the compositing technique is structurally
+sound (isolated buffer, no repeat of the prior shadow-attempt failure mode). Whether hair
+actually, visibly appears in front of the necklace on a real person — the one criterion
+this milestone's own request says matters more than any test — has not been confirmed.
+**M6.4 is not yet confirmed working; do not treat automated-test success as visual
+success.**
+
+## What M6.5 would add
+
+Per the stop condition: nothing further has been started. M6.5 (contact shadows) is
+explicitly deferred and was not touched — no shadow, blur, lighting, or material code was
+added in this milestone. M6.5 should only begin after the real-device visual test above
+is actually performed and reported.
+
+## Commit
+
+See `git log` — "feat(live-ar): add segmentation-aware 2D necklace occlusion (M6.4)".

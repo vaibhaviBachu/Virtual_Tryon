@@ -98,6 +98,43 @@ describe("SegmentationCadenceScheduler", () => {
     expect(scheduler.getLatest()).toBeNull();
     expect(scheduler.shouldRun(1001)).toBe(true); // acts like the very first frame again
   });
+
+  // M6.4 (docs/live-ar-realism-architecture.md §17): mask-age tracking for the stale
+  // check occlusion.ts performs before trusting a mask.
+  describe("getLatestAgeMs (M6.4)", () => {
+    it("is null before any run has ever succeeded", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      expect(scheduler.getLatestAgeMs(1000)).toBeNull();
+    });
+
+    it("is 0 immediately after a successful run", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1000, fakeResult(4, 4));
+      expect(scheduler.getLatestAgeMs(1000)).toBe(0);
+    });
+
+    it("grows as time passes without a new successful run", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1000, fakeResult(4, 4));
+      expect(scheduler.getLatestAgeMs(1300)).toBe(300);
+      expect(scheduler.getLatestAgeMs(2500)).toBe(1500);
+    });
+
+    it("does NOT reset to 0 on a run that itself fails -- age keeps growing from the last SUCCESSFUL run, not the last attempt", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1000, fakeResult(4, 4)); // succeeds at t=1000
+      scheduler.recordRun(1500, null); // attempt at t=1500 fails
+      scheduler.recordRun(2000, null); // attempt at t=2000 also fails
+      expect(scheduler.getLatestAgeMs(2100)).toBe(1100); // still measured from t=1000
+    });
+
+    it("resets to null after reset()", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1000, fakeResult(4, 4));
+      scheduler.reset();
+      expect(scheduler.getLatestAgeMs(1001)).toBeNull();
+    });
+  });
 });
 
 describe("buildSegmentationDebugRgba", () => {

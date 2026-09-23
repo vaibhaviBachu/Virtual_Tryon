@@ -19,7 +19,7 @@ import {
   readSavedNeckHorizontalOffsetOverride,
   saveNeckHorizontalOffsetOverride,
 } from "@/lib/live-ar/neck-horizontal-offset-override";
-import { formatPerformanceOverlayText, formatSegmentationDebugText } from "@/lib/live-ar/performance";
+import { formatOcclusionDebugText, formatPerformanceOverlayText, formatSegmentationDebugText } from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
 import { cn } from "@/lib/utils";
@@ -73,6 +73,12 @@ export function LiveArStudio() {
   // segmentation applies to every category, not just necklace, and this milestone is
   // explicitly a proof of concept, not a replacement for the necklace geometry panel.
   const [showSegmentationDebug, setShowSegmentationDebug] = useState(false);
+  // M6.4 (docs/live-ar-realism-architecture.md §6/§7/§17): dev-only toggle for the
+  // occlusion debug overlay (final per-pixel occlusion decision + mask-age/tracking
+  // text readout). Independent of showSegmentationDebug above -- occlusion COMPOSITING
+  // itself is always active for necklace whenever a fresh-enough mask exists,
+  // regardless of this flag; this only controls whether you can SEE the decision.
+  const [showOcclusionDebug, setShowOcclusionDebug] = useState(false);
   // Persisted, per-browser calibration override (see neck-fraction-override.ts) -- the
   // automatic default from constants.ts is used unless/until someone saves a value from
   // the slider below, at which point it applies on every necklace session in THIS
@@ -223,6 +229,7 @@ export function LiveArStudio() {
     debugNeckHorizontalOffsetOverride:
       category === "necklace" ? (showDebugOverlay ? neckHorizontalOffsetPreview : savedNeckHorizontalOffset) : null,
     showSegmentationDebug,
+    showOcclusionDebug,
   });
 
   async function handleCapture() {
@@ -297,6 +304,15 @@ export function LiveArStudio() {
                 {formatSegmentationDebugText(session.segmentationStatus, session.segmentationError, session.performance.segmentation)}
               </div>
             )}
+
+            {/* M6.4 proof of concept -- real occlusion compositing timing and mask-age
+                state for real-device verification, never estimated. Dev-only, never
+                part of the customer experience. */}
+            {showOcclusionDebug && (
+              <div className="absolute right-3 bottom-3 rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-rose-300">
+                {formatOcclusionDebugText(session.occlusionDebugInfo, session.performance.occlusion)}
+              </div>
+            )}
           </div>
 
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
@@ -338,6 +354,17 @@ export function LiveArStudio() {
               >
                 {showSegmentationDebug ? "Hide" : "Show"} segmentation debug
               </button>
+              {/* M6.4 -- dev-only, never part of the customer experience
+                  (docs/live-ar-realism-architecture.md §6/§7/§17). */}
+              {category === "necklace" && (
+                <button
+                  type="button"
+                  className="text-xs text-neutral-400 underline-offset-2 hover:underline"
+                  onClick={() => setShowOcclusionDebug((v) => !v)}
+                >
+                  {showOcclusionDebug ? "Hide" : "Show"} occlusion debug
+                </button>
+              )}
               <Button onClick={handleCapture} disabled={isLoadingPipeline || captureState === "capturing"}>
                 {captureState === "capturing" ? "Saving…" : "Capture"}
               </Button>
