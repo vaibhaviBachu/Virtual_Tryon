@@ -149,7 +149,7 @@ build (`Finished TypeScript in 16.4s`).
 
 ## Commit
 
-`b656e59` (see `git log` — "feat(live-ar): expose landmark depth for realism pipeline").
+`2eb825d` — "feat(live-ar): expose landmark depth for realism pipeline".
 
 ## What M6.3 will do next
 
