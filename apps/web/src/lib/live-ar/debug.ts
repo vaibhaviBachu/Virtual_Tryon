@@ -10,13 +10,28 @@
  * mirror transform in useLiveArSession.ts flips the whole canvas for display, so a debug
  * point drawn at a raw pixel coordinate here shows up in the correct mirrored place on
  * screen automatically, exactly like the jewellery sprite already does).
+ *
+ * M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17, §8-9): also
+ * reports the raw z values behind `computeShoulderDepthAsymmetry` (depth.ts), as a
+ * numeric-only diagnostic -- no visual/rendering change, extending this existing debug
+ * mechanism rather than adding a second one (per the request that produced this
+ * milestone). Deliberately does NOT report a "neck z": the neck-reference point is a 2D
+ * interpolation with no MediaPipe landmark of its own, so it has no real z to report --
+ * reporting one would be exactly the kind of fabricated number this project's docs
+ * repeatedly prohibit.
  */
 import { resolveEarPoints } from "@/lib/live-ar/geometry";
+import { safeLandmarkZ } from "@/lib/live-ar/depth";
 import { computeNeckReferenceFrame } from "@/lib/live-ar/neck-reference";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, LiveTransform, PixelPoint } from "@/lib/live-ar/types";
 
 const LEFT_SHOULDER_IDX = 11;
 const RIGHT_SHOULDER_IDX = 12;
+// Mirrors geometry.ts's own local NOSE_TIP_IDX -- duplicated here rather than imported,
+// matching this file's existing convention of keeping its own local landmark indices
+// (see LEFT_SHOULDER_IDX/RIGHT_SHOULDER_IDX above) instead of depending on geometry.ts's
+// internals.
+const NOSE_TIP_IDX = 1;
 
 export interface NecklaceDebugSnapshot {
   imageWidthPx: number;
@@ -58,6 +73,19 @@ export interface NecklaceDebugSnapshot {
    * build, or the visual interpretation of where the asset's attachment SHOULD be). */
   transformedAssetAttachmentPx: PixelPoint;
   finalVisibleBboxPx: [number, number, number, number]; // left, top, right, bottom in canvas space
+
+  // M6.2 depth foundation -- relative MediaPipe landmark z, NOT dense depth, NOT
+  // jewellery render depth (see depth.ts's file docstring). null whenever the source
+  // landmark's z is missing/non-finite (never fabricated). faceNoseZ and the shoulder
+  // z's use DIFFERENT MediaPipe origins (center-of-head vs hip-midpoint) and are NOT
+  // directly comparable to each other -- see formatNecklaceDebugSnapshot's own note.
+  faceNoseZ: number | null;
+  leftShoulderZ: number | null;
+  rightShoulderZ: number | null;
+  /** leftShoulderZ - rightShoulderZ (same as computeShoulderDepthAsymmetry's deltaZ).
+   * Negative means the left shoulder is closer to the camera. Null unless both
+   * shoulders' z are available. */
+  shoulderDepthDeltaZ: number | null;
 }
 
 /** Maps a point in the jewellery asset's OWN pixel space through the exact same
@@ -110,6 +138,11 @@ export function formatNecklaceDebugSnapshot(s: NecklaceDebugSnapshot): string {
       s.transformedAssetAttachmentPx.y - s.finalAttachmentPx.y
     ).toFixed(3)}px`,
     `FINAL VISIBLE BBOX (canvas space): [${s.finalVisibleBboxPx.map((n) => n.toFixed(1)).join(", ")}]`,
+    ``,
+    `DEPTH (M6.2 foundation -- relative landmark z, NOT dense depth; see docs/live-ar-realism-architecture.md §5):`,
+    `  face nose z=${fmtNum(s.faceNoseZ)}  (FaceLandmarker origin: center of head)`,
+    `  shoulders: left z=${fmtNum(s.leftShoulderZ)}  right z=${fmtNum(s.rightShoulderZ)}  delta(left-right)=${fmtNum(s.shoulderDepthDeltaZ)}  (PoseLandmarker origin: hip midpoint)`,
+    `  NOTE: face z and shoulder z use DIFFERENT origins -- not directly comparable to each other.`,
   ].join("\n");
 }
 
@@ -146,6 +179,13 @@ export function computeNecklaceDebugSnapshot(
   const shoulderMidpointPx =
     leftShoulderPx && rightShoulderPx ? { x: (leftShoulderPx.x + rightShoulderPx.x) / 2, y: (leftShoulderPx.y + rightShoulderPx.y) / 2 } : null;
   const shoulderWidthPx = leftShoulderPx && rightShoulderPx ? Math.abs(rightShoulderPx.x - leftShoulderPx.x) : null;
+
+  // M6.2 depth foundation -- see this file's docstring and depth.ts for the verified
+  // z convention and why face z / shoulder z are not directly comparable to each other.
+  const faceNoseZ = face ? safeLandmarkZ(face.landmarks[NOSE_TIP_IDX]) : null;
+  const leftShoulderZ = shoulderLandmarksPresent ? safeLandmarkZ(pose!.landmarks[LEFT_SHOULDER_IDX]) : null;
+  const rightShoulderZ = shoulderLandmarksPresent ? safeLandmarkZ(pose!.landmarks[RIGHT_SHOULDER_IDX]) : null;
+  const shoulderDepthDeltaZ = leftShoulderZ !== null && rightShoulderZ !== null ? leftShoulderZ - rightShoulderZ : null;
 
   const neck = computeNeckReferenceFrame(
     face,
@@ -195,5 +235,9 @@ export function computeNecklaceDebugSnapshot(
     finalAttachmentPx: transform.anchorPx,
     transformedAssetAttachmentPx,
     finalVisibleBboxPx,
+    faceNoseZ,
+    leftShoulderZ,
+    rightShoulderZ,
+    shoulderDepthDeltaZ,
   };
 }

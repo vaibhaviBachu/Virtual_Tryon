@@ -10,7 +10,13 @@
  * NOT measured from the subject's actual torso lean — it is always (0, 1), the image's
  * own downward axis. See ai/geometry/body_reference.py for the full account of why this
  * is a documented assumption, not a claim of measured body orientation.
+ *
+ * M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17): also reports
+ * `shoulderDepth`, the relative MediaPipe z between the two shoulder landmarks -- see
+ * depth.ts's file docstring. This has no effect on any of the pixel-space fields above;
+ * it is exposed for M6.3+ to build on, not consumed by anything yet.
  */
+import { computeShoulderDepthAsymmetry } from "@/lib/live-ar/depth";
 import type { BodyReferenceFrame, LivePoseLandmarks, PixelPoint } from "@/lib/live-ar/types";
 
 const LEFT_SHOULDER_IDX = 11;
@@ -41,5 +47,6 @@ export function computeBodyReferenceFrame(
     shoulderMidpointPx: midpointPx,
     shoulderWidthPx,
     verticalBodyDirection: [0, 1] as const,
+    shoulderDepth: computeShoulderDepthAsymmetry(pose),
   };
 }

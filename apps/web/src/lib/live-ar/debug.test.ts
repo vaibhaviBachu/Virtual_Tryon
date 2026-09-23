@@ -119,6 +119,38 @@ describe("computeNecklaceDebugSnapshot", () => {
   });
 });
 
+// M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17).
+describe("computeNecklaceDebugSnapshot -- depth fields (M6.2)", () => {
+  const transform: LiveTransform = {
+    anchorPx: { x: 500, y: 500 },
+    scaleFactor: 1,
+    rotationDegrees: 0,
+    sourceAnchorPx: { x: 100, y: 10 },
+    mirrored: false,
+  };
+
+  it("reports null depth fields when the fixtures carry no z (the pre-M6.2 default)", () => {
+    const snapshot = computeNecklaceDebugSnapshot(face(), pose(), IMAGE_W, IMAGE_H, assetGeometry(), transform);
+    expect(snapshot!.faceNoseZ).toBeNull();
+    expect(snapshot!.leftShoulderZ).toBeNull();
+    expect(snapshot!.rightShoulderZ).toBeNull();
+    expect(snapshot!.shoulderDepthDeltaZ).toBeNull();
+  });
+
+  it("reports real z values and the shoulder delta when the fixtures carry z", () => {
+    const withDepthFace = face();
+    withDepthFace.landmarks[1] = { ...withDepthFace.landmarks[1], z: -0.2 }; // nose tip
+    const withDepthPose = pose();
+    withDepthPose.landmarks[11] = { ...withDepthPose.landmarks[11], z: -0.03 }; // left shoulder
+    withDepthPose.landmarks[12] = { ...withDepthPose.landmarks[12], z: 0.05 }; // right shoulder
+    const snapshot = computeNecklaceDebugSnapshot(withDepthFace, withDepthPose, IMAGE_W, IMAGE_H, assetGeometry(), transform);
+    expect(snapshot!.faceNoseZ).toBeCloseTo(-0.2, 6);
+    expect(snapshot!.leftShoulderZ).toBeCloseTo(-0.03, 6);
+    expect(snapshot!.rightShoulderZ).toBeCloseTo(0.05, 6);
+    expect(snapshot!.shoulderDepthDeltaZ).toBeCloseTo(-0.08, 6);
+  });
+});
+
 describe("formatNecklaceDebugSnapshot", () => {
   it("produces a readable, non-empty multi-line report with no [object Object] leaks", () => {
     const transform: LiveTransform = {
@@ -134,6 +166,7 @@ describe("formatNecklaceDebugSnapshot", () => {
     expect(text).toContain("JEWELLERY ATTACHMENT");
     expect(text).toContain("FINAL ATTACHMENT");
     expect(text).toContain("TRANSFORMED JEWELLERY ATTACHMENT");
+    expect(text).toContain("DEPTH");
     expect(text).not.toContain("[object Object]");
   });
 });

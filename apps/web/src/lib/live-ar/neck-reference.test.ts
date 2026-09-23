@@ -105,4 +105,35 @@ describe("computeNeckReferenceFrame", () => {
     const frame = computeNeckReferenceFrame(face, pose, IMAGE_W, IMAGE_H);
     expect(frame!.confidence).toBeCloseTo(0.4, 6); // min(0.95, 0.4)
   });
+
+  // M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17): shoulderDepth
+  // is passed through from the underlying BodyReferenceFrame unchanged, on BOTH the
+  // face-interpolation and the no-face-fallback method.
+  describe("shoulderDepth passthrough (M6.2)", () => {
+    it("is null when the pose fixture has no z (unchanged default)", () => {
+      const pose = poseWithShoulders(0.35, 0.65, 0.4);
+      const face = faceWithChin(0.2);
+      expect(computeNeckReferenceFrame(face, pose, IMAGE_W, IMAGE_H)!.shoulderDepth).toBeNull();
+    });
+
+    it("is passed through on the face_chin_to_shoulder_interpolation method", () => {
+      const pose = poseWithShoulders(0.35, 0.65, 0.4);
+      pose.landmarks[11] = { ...pose.landmarks[11], z: -0.05 };
+      pose.landmarks[12] = { ...pose.landmarks[12], z: 0.02 };
+      const frame = computeNeckReferenceFrame(faceWithChin(0.2), pose, IMAGE_W, IMAGE_H);
+      expect(frame!.method).toBe("face_chin_to_shoulder_interpolation");
+      expect(frame!.shoulderDepth).not.toBeNull();
+      expect(frame!.shoulderDepth!.deltaZ).toBeCloseTo(-0.07, 6);
+    });
+
+    it("is passed through on the shoulder_offset_fallback_no_face method too", () => {
+      const pose = poseWithShoulders();
+      pose.landmarks[11] = { ...pose.landmarks[11], z: 0.03 };
+      pose.landmarks[12] = { ...pose.landmarks[12], z: -0.04 };
+      const frame = computeNeckReferenceFrame(null, pose, IMAGE_W, IMAGE_H);
+      expect(frame!.method).toBe("shoulder_offset_fallback_no_face");
+      expect(frame!.shoulderDepth).not.toBeNull();
+      expect(frame!.shoulderDepth!.deltaZ).toBeCloseTo(0.07, 6);
+    });
+  });
 });

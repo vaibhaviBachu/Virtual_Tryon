@@ -29,6 +29,24 @@ export interface PixelPoint {
   y: number;
 }
 
+/** Relative MediaPipe landmark depth (z) between two landmarks -- see depth.ts's file
+ * docstring for the verified z convention (smaller z = closer to camera) and its one
+ * critical caveat: this is only physically meaningful when both landmarks come from the
+ * SAME model result (both FaceLandmarker, or both PoseLandmarker) -- FaceLandmarker's z
+ * origin (center of head) and PoseLandmarker's z origin (hip midpoint) are NOT the same
+ * point in space. Defined here (not in depth.ts) because it's referenced by
+ * BodyReferenceFrame/NeckReferenceFrame/AnchorResult below, matching this file's
+ * existing convention of holding every cross-module geometry shape. */
+export interface RelativeDepthComparison {
+  referenceZ: number;
+  targetZ: number;
+  /** targetZ - referenceZ. Negative means the target landmark is closer to the camera
+   * than the reference landmark. */
+  deltaZ: number;
+  /** Convenience for deltaZ < 0. False on an exact tie (deltaZ === 0). */
+  targetIsCloser: boolean;
+}
+
 /** Minimal pose landmark subset this module needs — MediaPipe Pose's 33-point
  * topology, indices 11/12 ("left_shoulder"/"right_shoulder", the subject's OWN
  * anatomical left/right — see ai/landmarks/pose.py and ai/geometry/rotation.py's
@@ -54,6 +72,13 @@ export interface BodyReferenceFrame {
   shoulderMidpointPx: PixelPoint;
   shoulderWidthPx: number;
   verticalBodyDirection: readonly [number, number];
+  /** Relative MediaPipe landmark depth (z) between the two shoulder landmarks -- see
+   * depth.ts's file docstring for the verified z convention and why only same-model
+   * (both PoseLandmarker) z values are safely comparable. Null whenever either
+   * shoulder's z is missing/non-finite -- never fabricated. M6.2 foundation only: no
+   * placement/rendering decision reads this field yet (see
+   * docs/live-ar-realism-architecture.md §5/§17). */
+  shoulderDepth: RelativeDepthComparison | null;
 }
 
 /**
@@ -81,6 +106,9 @@ export interface NeckReferenceFrame {
   shoulderWidthPx: number;
   confidence: number;
   method: "face_chin_to_shoulder_interpolation" | "shoulder_offset_fallback_no_face";
+  /** Passed through from the underlying BodyReferenceFrame's shoulderDepth (see its own
+   * doc comment) -- M6.2 foundation only, not consumed by anchor placement itself. */
+  shoulderDepth: RelativeDepthComparison | null;
 }
 
 export interface AnchorResult {
@@ -89,6 +117,12 @@ export interface AnchorResult {
   referenceMeasurementPx: number | null;
   method: string;
   errorCode?: string;
+  /** M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17): relative
+   * shoulder depth passed through from the neck reference frame, for the necklace
+   * category only (earrings have no shoulder/body reference to draw from, so this is
+   * always undefined there). Never read by computeScale/computeRotation/rendering --
+   * exposed for M6.3+ to build on, not consumed yet. */
+  bodyDepth?: RelativeDepthComparison | null;
 }
 
 export interface ScaleResult {

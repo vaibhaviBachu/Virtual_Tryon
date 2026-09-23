@@ -25,6 +25,13 @@
  * module's `computeEarringRotation` resolves left/right the SAME safe way
  * `resolveEarPoints` (ported from ai/landmarks/face.py) already does, rather than
  * copying rotation.py's fixed-index formula verbatim.
+ *
+ * M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17): `AnchorResult`
+ * now also carries an optional `bodyDepth` (necklace only -- see types.ts), passed
+ * through from the neck reference frame's own `shoulderDepth`. This is exposed for
+ * future occlusion/perspective work, not consumed here -- computeScale/computeRotation
+ * and every existing x/y/scale/rotation output are numerically unchanged by its
+ * presence (see geometry.test.ts's M6.2 regression block).
  */
 import { computeBodyReferenceFrame } from "@/lib/live-ar/body-reference";
 import { computeNeckReferenceFrame } from "@/lib/live-ar/neck-reference";
@@ -181,6 +188,9 @@ function computeNecklaceAnchor(
     anchorPx,
     referenceMeasurementPx: neck.shoulderWidthPx,
     method: neck.method,
+    // M6.2 depth foundation only -- passed through, never read by computeScale/
+    // computeRotation/rendering (docs/live-ar-realism-architecture.md §5/§17).
+    bodyDepth: neck.shoulderDepth,
   };
 }
 

@@ -83,6 +83,7 @@ export function computeNeckReferenceFrame(
         shoulderWidthPx: body.shoulderWidthPx,
         confidence: Math.min(face.detectionConfidence, pose?.confidence ?? 0),
         method: "face_chin_to_shoulder_interpolation",
+        shoulderDepth: body.shoulderDepth,
       };
     }
   }
@@ -105,5 +106,6 @@ export function computeNeckReferenceFrame(
     shoulderWidthPx: body.shoulderWidthPx,
     confidence: (pose?.confidence ?? 0) * 0.6,
     method: "shoulder_offset_fallback_no_face",
+    shoulderDepth: body.shoulderDepth,
   };
 }

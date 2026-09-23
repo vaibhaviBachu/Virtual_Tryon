@@ -37,4 +37,22 @@ describe("computeBodyReferenceFrame", () => {
     };
     expect(computeBodyReferenceFrame(pose, IMAGE_W, IMAGE_H)).toBeNull();
   });
+
+  // M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17).
+  describe("shoulderDepth (M6.2)", () => {
+    it("is null when the fixture has no z (the default -- unchanged behavior for every pre-M6.2 fixture)", () => {
+      const frame = computeBodyReferenceFrame(poseWithShoulders(), IMAGE_W, IMAGE_H);
+      expect(frame!.shoulderDepth).toBeNull();
+    });
+
+    it("reports a real comparison when both shoulders carry a finite z", () => {
+      const pose = poseWithShoulders(0.35, 0.65, 0.4);
+      pose.landmarks[11] = { ...pose.landmarks[11], z: -0.05 };
+      pose.landmarks[12] = { ...pose.landmarks[12], z: 0.02 };
+      const frame = computeBodyReferenceFrame(pose, IMAGE_W, IMAGE_H);
+      expect(frame!.shoulderDepth).not.toBeNull();
+      expect(frame!.shoulderDepth!.deltaZ).toBeCloseTo(-0.07, 6);
+      expect(frame!.shoulderDepth!.targetIsCloser).toBe(true);
+    });
+  });
 });

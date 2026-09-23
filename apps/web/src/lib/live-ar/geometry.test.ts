@@ -347,3 +347,64 @@ describe("planCategoryRenders", () => {
     expect(plans[1].transform).toBeNull();
   });
 });
+
+// M6.2 depth foundation (docs/live-ar-realism-architecture.md §5/§17): landmark z is now
+// captured into BodyReferenceFrame/NeckReferenceFrame/AnchorResult.bodyDepth, but MUST
+// NOT change any existing x/y/scale/rotation output. This is the explicit regression
+// guard the milestone's own instructions require: OLD OUTPUT === NEW OUTPUT when z is
+// present but unused.
+describe("M6.2 regression: adding landmark z must not move anything that renders", () => {
+  it("necklace anchor is numerically identical whether or not shoulder landmarks carry z", () => {
+    const withoutZ = poseWithShoulders(0.35, 0.65, 0.4);
+    const withZ = poseWithShoulders(0.35, 0.65, 0.4);
+    withZ.landmarks[11] = { ...withZ.landmarks[11], z: -0.08 };
+    withZ.landmarks[12] = { ...withZ.landmarks[12], z: 0.03 };
+
+    const anchorWithoutZ = computeAnchor("necklace", null, null, withoutZ, IMAGE_W, IMAGE_H);
+    const anchorWithZ = computeAnchor("necklace", null, null, withZ, IMAGE_W, IMAGE_H);
+    expect(anchorWithZ.anchorPx!.x).toBeCloseTo(anchorWithoutZ.anchorPx!.x, 10);
+    expect(anchorWithZ.anchorPx!.y).toBeCloseTo(anchorWithoutZ.anchorPx!.y, 10);
+    expect(anchorWithZ.method).toBe(anchorWithoutZ.method);
+    // The new field IS populated when z is present -- confirming it's genuinely wired
+    // in, not just silently absent -- while the anchor position itself never moved.
+    expect(anchorWithoutZ.bodyDepth).toBeNull();
+    expect(anchorWithZ.bodyDepth).not.toBeNull();
+    expect(anchorWithZ.bodyDepth!.deltaZ).toBeCloseTo(-0.11, 6);
+  });
+
+  it("full necklace render plan (transform) is numerically identical whether or not z is present", () => {
+    const withoutZ = poseWithShoulders(0.35, 0.65, 0.4);
+    const withZ = poseWithShoulders(0.35, 0.65, 0.4);
+    withZ.landmarks[11] = { ...withZ.landmarks[11], z: -0.08 };
+    withZ.landmarks[12] = { ...withZ.landmarks[12], z: 0.03 };
+    const geometry = makeAssetGeometry();
+
+    const plansWithoutZ = planCategoryRenders("necklace", geometry, null, withoutZ, IMAGE_W, IMAGE_H);
+    const plansWithZ = planCategoryRenders("necklace", geometry, null, withZ, IMAGE_W, IMAGE_H);
+    expect(plansWithZ[0].transform).toEqual(plansWithoutZ[0].transform);
+  });
+
+  it("earring anchors/rotation are unaffected by z entirely (earrings have no shoulder/body reference)", () => {
+    const face = faceWithEars();
+    face.landmarks[234] = { ...face.landmarks[234], z: -0.02 };
+    face.landmarks[454] = { ...face.landmarks[454], z: 0.06 };
+    const withZ = computeAnchor("earrings", "left", face, null, IMAGE_W, IMAGE_H);
+    const withoutZ = computeAnchor("earrings", "left", faceWithEars(), null, IMAGE_W, IMAGE_H);
+    expect(withZ.anchorPx).toEqual(withoutZ.anchorPx);
+    expect(withZ.bodyDepth).toBeUndefined(); // not applicable to earrings -- see types.ts
+  });
+
+  it("computeNecklaceRotation's output is bit-identical with or without shoulder z (z is not read by rotation math)", () => {
+    const landmarks: NormalizedPoint[] = Array.from({ length: 13 }, () => ({ x: 0.5, y: 0.1, visibility: 0.9 }));
+    landmarks[11] = { x: 0.65, y: 0.4, visibility: 0.9 };
+    landmarks[12] = { x: 0.35, y: 0.4, visibility: 0.9 };
+    const withoutZ = computeNecklaceRotation({ landmarks, confidence: 0.9 }, 1000, 1000);
+
+    const landmarksWithZ = landmarks.map((l) => ({ ...l }));
+    landmarksWithZ[11] = { ...landmarksWithZ[11], z: -0.08 };
+    landmarksWithZ[12] = { ...landmarksWithZ[12], z: 0.03 };
+    const withZ = computeNecklaceRotation({ landmarks: landmarksWithZ, confidence: 0.9 }, 1000, 1000);
+
+    expect(withZ).toEqual(withoutZ);
+  });
+});
