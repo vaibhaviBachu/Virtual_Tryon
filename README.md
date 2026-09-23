@@ -248,9 +248,15 @@ account):**
 **Planned, not implemented yet:**
 - Occlusion/shadow/depth realism for jewellery in Live AR — attempted and explicitly
   reverted (see Known issues below); jewellery currently renders as a flat, geometrically
-  correct overlay with no contact-shadow or depth cue
-- Additional categories, and a generative-AI rendering path for the async photo flow
-  (distinct from Live AR's real-time geometry engine) — not started
+  correct overlay with no contact-shadow or depth cue. The goal (matching commercial
+  live generative garment try-on apps) needs either a specialized real-time jewellery
+  rendering model running in-browser, or a per-frame cloud GPU round-trip through a
+  generative model (which reads as laggy, not live, at current diffusion-model speeds,
+  and needs GPU hosting this project doesn't have) — evaluated but not started; a
+  narrower incremental improvement to the existing Canvas 2D renderer, verified on a
+  real device after every single change instead of guessed in a batch, is the
+  currently-planned next attempt
+- Additional categories — not started
 - Full auth enforcement (registration, refresh tokens, persisted sessions), rate
   limiting, retention policies, CI/CD (Milestone 7)
 
