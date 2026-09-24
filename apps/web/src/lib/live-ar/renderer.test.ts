@@ -7,6 +7,7 @@ import {
   ensureCanvasSize,
   renderLiveFrame,
 } from "@/lib/live-ar/renderer";
+import type { JewelleryStrip } from "@/lib/live-ar/jewellery-deformation";
 import type { LiveTransform } from "@/lib/live-ar/types";
 
 function makeFakeCtx() {
@@ -73,6 +74,40 @@ describe("drawJewelleryOverlay", () => {
     drawJewelleryOverlay(ctx, {} as CanvasImageSource, { ...baseTransform, mirrored: true }, 1);
     expect(ctx.scale).toHaveBeenCalledWith(-2, 2);
   });
+
+  // M6.5 (jewellery-deformation.ts): strips is an OPTIONAL trailing parameter so every
+  // test/call site above (written before M6.5) keeps passing unchanged -- these tests
+  // cover the new opt-in path specifically.
+  it("draws each strip as its own drawImage call, with the strip's own dropPx added to the local Y offset", () => {
+    const { ctx, calls } = makeFakeCtx();
+    const strips: JewelleryStrip[] = [
+      { sourceX: 0, sourceWidth: 5, sourceHeight: 20, dropPx: 0 },
+      { sourceX: 5, sourceWidth: 5, sourceHeight: 20, dropPx: 3 },
+    ];
+    drawJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1, strips);
+    expect(calls).toEqual([
+      "save",
+      "translate(100,50)",
+      `rotate(${(30 * Math.PI) / 180})`,
+      "scale(2,2)",
+      "drawImage",
+      "drawImage",
+      "restore",
+    ]);
+    // destX = strip.sourceX - sourceAnchorPx.x (10); destY = strip.dropPx - sourceAnchorPx.y (5).
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, expect.anything(), 0, 0, 5, 20, -10, -5, 5, 20);
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(2, expect.anything(), 5, 0, 5, 20, -5, -2, 5, 20);
+  });
+
+  it("falls back to the single, whole-image drawImage call (byte-for-byte the pre-M6.5 behavior) when strips is null, undefined, or empty", () => {
+    const cases: (JewelleryStrip[] | null | undefined)[] = [null, undefined, []];
+    for (const strips of cases) {
+      const { ctx, calls } = makeFakeCtx();
+      drawJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1, strips);
+      expect(calls).toEqual(["save", "translate(100,50)", `rotate(${(30 * Math.PI) / 180})`, "scale(2,2)", "drawImage", "restore"]);
+      expect(ctx.drawImage).toHaveBeenCalledWith(expect.anything(), -10, -5);
+    }
+  });
 });
 
 describe("renderLiveFrame", () => {
@@ -92,6 +127,18 @@ describe("renderLiveFrame", () => {
     expect(calls[0]).toBe("clearRect");
     expect(calls[1]).toBe("drawImage"); // the video frame
     expect(calls).toContain("save"); // the overlay composition
+  });
+
+  it("forwards jewellery.strips through to drawJewelleryOverlay", () => {
+    const { ctx } = makeFakeCtx();
+    const strips: JewelleryStrip[] = [{ sourceX: 0, sourceWidth: 10, sourceHeight: 10, dropPx: 1 }];
+    renderLiveFrame(
+      ctx,
+      { video: {} as CanvasImageSource, videoWidthPx: 640, videoHeightPx: 480 },
+      { image: {} as CanvasImageSource, transform: baseTransform, opacity: 1, strips }
+    );
+    // Call 1 is the video frame's own drawImage; call 2 is the (only) strip's.
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(2, expect.anything(), 0, 0, 10, 10, -10, -4, 10, 10);
   });
 });
 
@@ -130,6 +177,25 @@ describe("drawOccludedJewelleryOverlay", () => {
     // exactly as it does when called directly (see its own test above).
     expect(calls.slice(1)).toEqual(["save", "drawImage", "restore"]);
     expect(compositeOpAtDrawImage).toEqual(["destination-out"]);
+  });
+
+  it("forwards strips through to its internal drawJewelleryOverlay call, so occlusion always composites against the SAME curved shape that's visible", () => {
+    const { ctx, calls } = makeFakeCtx();
+    const strips: JewelleryStrip[] = [{ sourceX: 0, sourceWidth: 20, sourceHeight: 20, dropPx: 2 }];
+    drawOccludedJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1, {} as CanvasImageSource, 256, 256, 640, 480, strips);
+    expect(calls).toEqual([
+      "clearRect",
+      "save",
+      "translate(100,50)",
+      `rotate(${(30 * Math.PI) / 180})`,
+      "scale(2,2)",
+      "drawImage", // the strip
+      "restore",
+      "save",
+      "drawImage", // the erase
+      "restore",
+    ]);
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, expect.anything(), 0, 0, 20, 20, -10, -3, 20, 20);
   });
 });
 

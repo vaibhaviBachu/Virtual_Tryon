@@ -141,3 +141,37 @@ export const SEGMENTATION_INTERVAL_MS_DEFAULT = 500;
 // mask could be describing a meaningfully different scene. UNCALIBRATED beyond this
 // reasoning -- re-derive from real numbers if M6.3's measured timings change materially.
 export const OCCLUSION_STALE_MASK_THRESHOLD_MS = 2000;
+
+// --- M6.5 (jewellery-attachment.ts / jewellery-deformation.ts): per-attachment-class
+// neck curvature. UNCALIBRATED pending real-camera verification, same status as
+// NECKLACE_LENGTH_OFFSET_MULTIPLIER above -- these are a reasonable documented starting
+// point (a choker sits tighter/flatter against the neck than a longer piece), not a
+// measured result. Re-tune against a real camera, the same way
+// NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH's history above was. ---
+
+// How much the jewellery's own top contour is allowed to dip downward at its
+// horizontal center, as a fraction of the jewellery's own measured (alpha-bbox) width,
+// modeling how a real necklace bows to follow the neck/collarbone instead of hanging as
+// a flat rectangle. 0 would mean no curvature at all.
+export const NECKLACE_CURVATURE_MAX_DROP_FRACTION: Record<string, number> = {
+  choker: 0.05,
+  necklace: 0.09,
+  haaram: 0.07,
+};
+
+// How many vertical strips the jewellery sprite is sliced into to approximate the
+// curve (jewellery-deformation.ts's computeJewelleryStrips) -- each strip is drawn as
+// its own rigid drawImage call, rigidly shifted along the LOCAL y-axis, never stretched
+// or resampled internally (Step 11: no fake stretch/warp tricks). Same value for every
+// attachment class: this is a rendering-resolution choice, not a visual-design one.
+// 20 was chosen as visually smooth for a typical few-hundred-pixel-wide necklace while
+// staying cheap (20 extra drawImage calls/frame is negligible next to this pipeline's
+// already-measured segmentation/occlusion costs -- see docs/live-ar-realism-verification.md).
+export const NECKLACE_CURVATURE_STRIP_COUNT = 20;
+
+// Distinguishes a choker (a wide, short band that sits flat against the neck) from a
+// taller/longer necklace design, using the asset's OWN measured alpha-bbox aspect ratio
+// (height / width) -- never invented, never read from unpopulated catalogue metadata.
+// Documented heuristic, not a calibrated boundary: a choker band is typically much wider
+// than it is tall; ordinary necklace pendants/chains are closer to square or taller.
+export const CHOKER_ASPECT_RATIO_THRESHOLD = 0.35;

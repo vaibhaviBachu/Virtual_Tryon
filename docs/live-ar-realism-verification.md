@@ -1197,3 +1197,128 @@ already-documented `react-hooks/refs` collateral, verified by diffing against th
 `b4b0ec2` baseline), and `npm run build` all pass. **Still CODE VERIFIED only.** Steps
 3-9 (the real-camera tests) and Step 10 (the final report) are the user's to perform —
 not started, not predicted here.
+
+## 18. M6.5 — realistic jewellery wearing / contact rendering
+
+### Algorithm chosen (Step 5)
+
+Considered: (A) mesh-based 2D deformation, (B) piecewise-affine strips, (C) full Canvas
+mesh warp, (D) WebGL vertex deformation, (E) cylindrical projection. **Chosen: a
+simplified (B)** — the jewellery sprite is sliced into `NECKLACE_CURVATURE_STRIP_COUNT`
+(20) vertical strips; each is drawn with its own rigid vertical offset, forming a
+shallow parabolic bow across the piece's width. No per-strip stretching/resampling
+(Step 11: no fake-warp tricks). Rejected: (D)/(E) need WebGL or per-pixel resampling,
+neither of which this milestone's Canvas-2D-only, no-architecture-redesign constraint
+permits; (A)/(C) are strictly more general than this problem (a single top-contour bow)
+needs. See `jewellery-deformation.ts`'s file docstring for the full reasoning.
+
+### Architecture (Step 13) — new modules, existing ones extended, nothing replaced
+
+- `jewellery-attachment.ts` (new): resolves a neck item's attachment class
+  (choker/necklace/haaram) from its catalogue category slug + measured asset aspect
+  ratio, and the curvature/length-multiplier parameters that follow from it.
+- `jewellery-deformation.ts` (new): `computeJewelleryStrips` — pure, asset-geometry-only
+  (never per-frame), producing the strip plan `renderer.ts` draws.
+- `renderer.ts`: `drawJewelleryOverlay` gained an **optional** trailing `strips` param
+  (every pre-M6.5 call site/test is unaffected — see renderer.test.ts's new "falls back
+  to the single drawImage call" test). `drawOccludedJewelleryOverlay` forwards it to the
+  SAME internal call, so the visible sprite, the occluded-compositor sprite, and
+  `useLiveArSession.ts`'s own alpha-footprint local-canvas render all go through one
+  function and therefore can never disagree about the curved shape — the identical
+  "one source of truth for the transform" discipline M6.4's bounding-box fix
+  established, now extended to cover curvature.
+- `asset-cache.ts`: `computeGeometry`/`loadJewelleryAssetTexture` gained an explicit
+  `physicalWidthMm` parameter (Step 6), activating `geometry.ts`'s `computeScale`
+  physical-dimension branch, which existed since Milestone 4/5 but was fed `null` on
+  every Live AR call until now.
+- `useLiveArSession.ts` / `LiveArStudio.tsx`: thread each neck item's own
+  `category.slug` + `physical_width_mm` from its already-fetched `JewelleryResponse`
+  into the above, and resolve/cache the attachment model + strip plan once per loaded
+  asset (never per frame — see `LoadedJewelleryTexture`/`resolveLoadedTexture`).
+  `geometry.ts`'s existing `necklaceLength` parameter (present but always `null` before
+  this milestone — see `NECKLACE_LENGTH_OFFSET_MULTIPLIER`'s own history) is now
+  actually fed each item's resolved length key, with the hook's own `necklaceLength`
+  prop kept as a rare manual override.
+- Segmentation/occlusion (M6.3/M6.4), tracking, smoothing, and the neck reference frame
+  itself (Steps 2/4's "do not replace the existing architecture") are **unchanged** —
+  curvature composes with occlusion by construction (same draw function), not by a new
+  interaction being hand-written.
+
+### Asset audit (Step 1)
+
+**Cannot be run from this sandbox**: the catalogue's real rows/assets live in this
+project's own Postgres/MinIO, which this sandbox cannot reach (`localhost:5432`
+connection refused; no Docker daemon). `scripts/audit_jewellery_assets.py` is written,
+reviewed, and ready — run `python scripts/audit_jewellery_assets.py` wherever the
+database and object storage ARE reachable (the same native-process convention as
+`scripts/seed_admin.py`) to get real per-item measurements (pixel dimensions, alpha
+bbox, aspect ratio, anchor/attachment metadata, physical dimensions populated-or-not,
+left/right alpha symmetry).
+
+What IS knowable from the schema alone, with certainty, without running it: **every
+catalogue asset is a single flat 2D RGBA PNG** — `db/models/jewellery_asset.py` has
+exactly one image per asset row and no depth-layer/mesh/3D field of any kind. No amount
+of geometry work changes that; see Step 16 below.
+
+### Real-device test protocol (Step 9) — for you to run, not predicted here
+
+1. Open `/try-on/live`, select a **choker-shaped** item, a **medium necklace**, and (if
+   catalogued) a **haaram**, one at a time. Confirm each visibly bows slightly at the
+   top rather than sitting as a flat rectangle — the effect is SUBTLE by design (Step
+   11: no exaggerated fake curve), so look at the top contour specifically, not the
+   whole piece's silhouette.
+2. Repeat the M6.4 real-device test matrix (docs section 16 above) for each: neutral,
+   head left/right/up/down, move closer/farther, shoulders raised, hair beside/crossing.
+   Confirm occlusion still visibly erases hair-covered pixels correctly for a CURVED
+   piece — this is the one thing that could newly regress (curvature + occlusion
+   composing) if the "one source of truth" wiring above were wrong somewhere.
+3. Record real FPS/frame-time (`Show performance`) before vs. after enabling a
+   necklace, for a choker (few strips visually matter less) and a tall haaram-shaped
+   asset. The 20 extra `drawImage` calls/frame are NOT separately instrumented — they
+   fall inside the EXISTING `renderMs`/`alphaMaskMs` measurements (unchanged fields),
+   so compare those numbers directly rather than looking for a new counter.
+4. Layer a necklace + a haaram together (`Choose pieces to layer`) and confirm both
+   still track/curve independently without the vertical-layering offset breaking.
+
+### Tests / build (Steps 14/15)
+
+New: `jewellery-attachment.test.ts` (9), `jewellery-deformation.test.ts` (9), plus
+strip-path tests added to `renderer.test.ts` and `asset-cache.test.ts`. `src/lib/live-ar`
+suite: 275 → **301**. Full web suite: **342/342**. `npx tsc --noEmit`: clean. `npm run
+build`: succeeds, same 7 routes. Lint: 53 problems before and after (identical count,
+diffed against this milestone's own starting commit `13fe841`) — zero new issues; the
+53 are the pre-existing, already-documented `react-hooks/refs`/`set-state-in-effect`
+collateral pattern from every prior milestone. No generative AI touches the live camera
+loop (Step 15) — nothing added here calls any AI/image-generation API.
+
+### Honest limitations (Step 16)
+
+1. **Achievable with current (flat PNG) assets, done this milestone**: attachment-class-
+   aware placement/length (choker/necklace/haaram), a top-contour curvature bow, and
+   physical-dimension-aware scale where the catalogue has it set.
+2. **Requires asset preparation**: nothing added this milestone strictly requires new
+   asset metadata (curvature/attachment class are derived from what already exists), but
+   if/when `extra_measurements` starts carrying an explicit admin-supplied necklace
+   length, `jewellery-attachment.ts`'s resolver should be updated to prefer it over the
+   aspect-ratio heuristic (documented in that file's own docstring).
+3. **Requires 2.5D deformation beyond this milestone's strip bow**: true front-to-back
+   wrap-around (the piece's near/far side both visible as the head turns) — this
+   milestone only bows the top contour, a rigid per-column shift, not a resampled wrap.
+4. **Requires 3D jewellery models**: true depth/thickness, occlusion by the neck's own
+   far side, physically correct draping under gravity for a long haaram's dangling
+   portion.
+5. **Requires depth estimation**: real per-user neck circumference/distance-from-camera,
+   rather than the shoulder-width/face-width anthropometric-average calibration this
+   pipeline (and the Python photo engine it mirrors) has used since Milestone 4.
+6. **Requires lighting/material rendering**: specular highlights, contact shadows under
+   the chin/collarbone, metal/gem material response — explicitly out of scope (M6.5
+   Step 15 and this project's own architecture doc's "future realism" section).
+7. **Could optionally use AI later**: generative harmonization for CAPTURED STILL
+   IMAGES only (never the live camera loop) — unchanged from the M6.1 architecture
+   audit's own conclusion.
+
+**CODE VERIFIED, not REAL DEVICE VERIFIED.** Steps 9's real-camera tests and this
+milestone's success criteria (17 of 18 are engineering claims already checked above;
+#17, "real-device screenshots demonstrate the improvement," is yours to produce) are
+not performed from this sandbox. Per the M6.5 request's own instruction: **STOP here —
+do not begin M6.6.**

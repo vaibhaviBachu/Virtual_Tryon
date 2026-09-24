@@ -216,15 +216,28 @@ export function LiveArStudio() {
       };
     }),
   });
-  const additionalNecklaceItems = additionalNeckIds.map((id, index) => ({
-    jewelleryId: id,
-    asset: additionalAssetQueries[index]?.data ?? null,
-  }));
+  // M6.5 (jewellery-attachment.ts): each item's OWN catalogue category slug + physical
+  // width feed its attachment class (choker/necklace/haaram) and scale -- sourced from
+  // whichever list actually holds the full JewelleryResponse for that id (neckItems for
+  // necklace mode, jewelleryQuery's own list for earrings).
+  const primaryJewelleryItem =
+    (category === "necklace" ? neckItems : jewelleryQuery.data?.items ?? []).find((item) => item.id === primaryId) ?? null;
+  const additionalNecklaceItems = additionalNeckIds.map((id, index) => {
+    const item = neckItems.find((neckItem) => neckItem.id === id) ?? null;
+    return {
+      jewelleryId: id,
+      asset: additionalAssetQueries[index]?.data ?? null,
+      categorySlug: item?.category.slug ?? null,
+      physicalWidthMm: item?.physical_width_mm ?? null,
+    };
+  });
 
   const session = useLiveArSession({
     category,
     jewelleryId: primaryId,
     asset: assetWithPreviewQuery.data ?? null,
+    primaryCategorySlug: primaryJewelleryItem?.category.slug ?? null,
+    primaryPhysicalWidthMm: primaryJewelleryItem?.physical_width_mm ?? null,
     additionalNecklaceItems: category === "necklace" ? additionalNecklaceItems : [],
     debugEnabled: showDebugOverlay,
     // While the debug panel is open, the slider previews live (even before it's saved).

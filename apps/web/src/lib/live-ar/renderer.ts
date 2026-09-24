@@ -30,6 +30,7 @@
  */
 import type { LiveTransform, PixelPoint } from "@/lib/live-ar/types";
 import type { NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
+import type { JewelleryStrip } from "@/lib/live-ar/jewellery-deformation";
 
 export interface RenderableFrame {
   video: CanvasImageSource;
@@ -44,12 +45,12 @@ export interface RenderableFrame {
 export function renderLiveFrame(
   ctx: CanvasRenderingContext2D,
   frame: RenderableFrame,
-  jewellery: { image: CanvasImageSource; transform: LiveTransform; opacity: number } | null
+  jewellery: { image: CanvasImageSource; transform: LiveTransform; opacity: number; strips?: JewelleryStrip[] | null } | null
 ): void {
   ctx.clearRect(0, 0, frame.videoWidthPx, frame.videoHeightPx);
   ctx.drawImage(frame.video, 0, 0, frame.videoWidthPx, frame.videoHeightPx);
   if (jewellery !== null) {
-    drawJewelleryOverlay(ctx, jewellery.image, jewellery.transform, jewellery.opacity);
+    drawJewelleryOverlay(ctx, jewellery.image, jewellery.transform, jewellery.opacity, jewellery.strips);
   }
 }
 
@@ -57,12 +58,24 @@ export function renderLiveFrame(
  * as ai/geometry/transform.py's `compute_transform` (translate the asset's own anchor
  * to the target anchor, then scale, then rotate -- see buildLiveTransform's docstring
  * in geometry.ts for why a mirrored asset can be drawn directly from its ORIGINAL
- * (unmirrored) anchor rather than needing a separately-mirrored geometry object). */
+ * (unmirrored) anchor rather than needing a separately-mirrored geometry object).
+ *
+ * `strips` (M6.5, jewellery-deformation.ts): when omitted/null/empty, draws the WHOLE
+ * image in one `drawImage` call -- byte-for-byte the pre-M6.5 behavior. When provided,
+ * draws each strip with its own `dropPx` added to the local Y offset, approximating the
+ * jewellery bowing to follow the neck (see jewellery-deformation.ts's file docstring).
+ * This is the ONE function every draw path (the visible sprite, the occluded-compositor
+ * sprite via drawOccludedJewelleryOverlay below, and useLiveArSession.ts's own
+ * alpha-footprint local-canvas render) goes through, so curvature can never silently
+ * drift between what's drawn, what's occluded, and what's alpha-footprint-measured --
+ * the same "one source of truth for the transform" discipline M6.4's bounding-box bug
+ * fix established, extended to cover curvature too. */
 export function drawJewelleryOverlay(
   ctx: CanvasRenderingContext2D,
   image: CanvasImageSource,
   transform: LiveTransform,
-  opacity: number
+  opacity: number,
+  strips?: JewelleryStrip[] | null
 ): void {
   const clampedOpacity = Math.max(0, Math.min(1, opacity));
   if (clampedOpacity <= 0) return;
@@ -72,7 +85,23 @@ export function drawJewelleryOverlay(
   ctx.translate(transform.anchorPx.x, transform.anchorPx.y);
   ctx.rotate((transform.rotationDegrees * Math.PI) / 180);
   ctx.scale(transform.mirrored ? -transform.scaleFactor : transform.scaleFactor, transform.scaleFactor);
-  ctx.drawImage(image, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);
+  if (strips && strips.length > 0) {
+    for (const strip of strips) {
+      ctx.drawImage(
+        image,
+        strip.sourceX,
+        0,
+        strip.sourceWidth,
+        strip.sourceHeight,
+        strip.sourceX - transform.sourceAnchorPx.x,
+        strip.dropPx - transform.sourceAnchorPx.y,
+        strip.sourceWidth,
+        strip.sourceHeight
+      );
+    }
+  } else {
+    ctx.drawImage(image, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);
+  }
   ctx.restore();
 }
 
@@ -160,10 +189,11 @@ export function drawOccludedJewelleryOverlay(
   eraseMaskWidthPx: number,
   eraseMaskHeightPx: number,
   outputWidthPx: number,
-  outputHeightPx: number
+  outputHeightPx: number,
+  strips?: JewelleryStrip[] | null
 ): void {
   offscreenCtx.clearRect(0, 0, outputWidthPx, outputHeightPx);
-  drawJewelleryOverlay(offscreenCtx, image, transform, opacity);
+  drawJewelleryOverlay(offscreenCtx, image, transform, opacity, strips);
   offscreenCtx.save();
   offscreenCtx.globalCompositeOperation = "destination-out";
   offscreenCtx.drawImage(eraseMaskSource, 0, 0, eraseMaskWidthPx, eraseMaskHeightPx, 0, 0, outputWidthPx, outputHeightPx);

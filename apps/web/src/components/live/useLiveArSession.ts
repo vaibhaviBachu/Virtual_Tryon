@@ -8,6 +8,8 @@ import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
 import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { computeTransformedBoundingBox, planCategoryRenders } from "@/lib/live-ar/geometry";
+import { computeJewelleryStrips, type JewelleryStrip } from "@/lib/live-ar/jewellery-deformation";
+import { resolveNecklaceAttachmentModel, type JewelleryAttachmentModel } from "@/lib/live-ar/jewellery-attachment";
 import {
   NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH,
   OCCLUSION_STALE_MASK_THRESHOLD_MS,
@@ -64,6 +66,30 @@ function makeSlotState(): SlotState {
   return { trackingMachine: new TrackingStateMachine<LiveTransform>(), smoother: new TransformSmoother() };
 }
 
+/** M6.5: everything resolved once at asset-load time and reused every frame --
+ * `attachmentModel`/`strips` are null for earrings (attachment class / neck curvature
+ * are necklace-only concepts; see jewellery-attachment.ts) and populated for necklace
+ * mode. Computing this ONCE here (not per frame) is what keeps computeJewelleryStrips'
+ * per-asset-only cost off the render loop -- see jewellery-deformation.ts's docstring. */
+interface LoadedJewelleryTexture {
+  image: HTMLImageElement;
+  geometry: JewelleryAssetGeometry;
+  attachmentModel: JewelleryAttachmentModel | null;
+  strips: JewelleryStrip[] | null;
+}
+
+function resolveLoadedTexture(
+  loaded: { image: HTMLImageElement; geometry: JewelleryAssetGeometry },
+  category: CategorySlug,
+  categorySlug: string | null
+): LoadedJewelleryTexture {
+  if (category !== "necklace") {
+    return { ...loaded, attachmentModel: null, strips: null };
+  }
+  const attachmentModel = resolveNecklaceAttachmentModel(categorySlug, loaded.geometry);
+  return { ...loaded, attachmentModel, strips: computeJewelleryStrips(loaded.geometry, attachmentModel.curvature) };
+}
+
 /** Smooths only the numeric fields of a LiveTransform, preserving `mirrored` and
  * `sourceAnchorPx` unchanged -- those are asset-space constants for the current
  * texture, not tracked quantities, so smoothing them would be meaningless. */
@@ -85,15 +111,37 @@ export interface UseLiveArSessionArgs {
   category: CategorySlug;
   jewelleryId: string | null;
   asset: AssetWithPreviewResponse | null;
+  /** Explicit override for the geometry length-adjustment multiplier (geometry.ts's
+   * computeNecklaceAnchor) -- almost never needed: M6.5's `primaryCategorySlug` +
+   * measured asset geometry already resolve this automatically per item (see
+   * jewellery-attachment.ts's resolveNecklaceAttachmentModel). Non-null here wins over
+   * the automatic resolution, for a manual/diagnostic override. */
   necklaceLength?: string | null;
+  /** M6.5 (jewellery-attachment.ts): the PRIMARY item's own catalogue category slug
+   * (e.g. "necklace" or "haaram" -- from `JewelleryResponse.category.slug`), used to
+   * resolve its attachment class (choker/necklace/haaram) and neck curvature. Only
+   * consulted in necklace mode; harmless to pass for earrings. */
+  primaryCategorySlug?: string | null;
+  /** M6.5 spec Step 6: the PRIMARY item's own `JewelleryResponse.physical_width_mm`
+   * (lives on the parent jewellery item, not the asset -- see asset-cache.ts's
+   * computeGeometry doc comment). Feeds computeScale's existing, previously-dormant
+   * physical-dimension scale path for BOTH categories, not just necklaces. */
+  primaryPhysicalWidthMm?: number | null;
   /** Necklace-mode-only: further neck items worn AT THE SAME TIME as `asset` above
    * (e.g. a haaram layered under a necklace) -- see LiveArStudio's multi-select
    * "Choose pieces to layer" panel. Each is rendered with its own independent
    * tracking/smoothing state, progressively nudged further down the neck than the
    * previous one (constants.ts's NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH) so
    * simultaneously worn items land at visibly different depths. Empty/omitted outside
-   * necklace mode -- unchanged single-item behavior. */
-  additionalNecklaceItems?: { jewelleryId: string; asset: AssetWithPreviewResponse | null }[];
+   * necklace mode -- unchanged single-item behavior. `categorySlug`/`physicalWidthMm`
+   * (M6.5) are this item's OWN JewelleryResponse fields, same meaning as
+   * `primaryCategorySlug`/`primaryPhysicalWidthMm` above. */
+  additionalNecklaceItems?: {
+    jewelleryId: string;
+    asset: AssetWithPreviewResponse | null;
+    categorySlug?: string | null;
+    physicalWidthMm?: number | null;
+  }[];
   /** Draws the necklace geometry debug overlay (face/shoulder/neck/jewellery attachment
    * points) and exposes the raw numeric snapshot via `debugSnapshot`. Diagnostic-only --
    * never affects the actual jewellery placement/rendering. */
@@ -215,6 +263,8 @@ export function useLiveArSession({
   jewelleryId,
   asset,
   necklaceLength = null,
+  primaryCategorySlug = null,
+  primaryPhysicalWidthMm = null,
   additionalNecklaceItems = [],
   debugEnabled = false,
   debugNeckFractionOverride = null,
@@ -263,11 +313,11 @@ export function useLiveArSession({
   // segmentation category data.
   const jewelleryAlphaLocalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const jewelleryAlphaRegionCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const assetGeometryRef = useRef<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null>(null);
+  const assetGeometryRef = useRef<LoadedJewelleryTexture | null>(null);
   // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
   // fresh every frame inside the render loop (never restarts it), updated by the
   // separate effect below whenever the selected set/preview URLs actually change.
-  const additionalGeometryRef = useRef<Map<string, { image: HTMLImageElement; geometry: JewelleryAssetGeometry }>>(new Map());
+  const additionalGeometryRef = useRef<Map<string, LoadedJewelleryTexture>>(new Map());
   const slotsRef = useRef<Map<string, SlotState>>(new Map());
   const performanceTrackerRef = useRef(new PerformanceTracker());
   const rafRef = useRef<number | null>(null);
@@ -405,10 +455,10 @@ export function useLiveArSession({
     let cancelled = false;
     setAssetLoading(true);
     setAssetError(null);
-    loadJewelleryAssetTexture(asset, asset.preview_url)
+    loadJewelleryAssetTexture(asset, asset.preview_url, primaryPhysicalWidthMm)
       .then((loaded) => {
         if (cancelled) return;
-        assetGeometryRef.current = loaded;
+        assetGeometryRef.current = resolveLoadedTexture(loaded, category, primaryCategorySlug);
         setAssetLoading(false);
       })
       .catch((err) => {
@@ -420,12 +470,14 @@ export function useLiveArSession({
     return () => {
       cancelled = true;
     };
-  }, [asset]);
+  }, [asset, category, primaryCategorySlug, primaryPhysicalWidthMm]);
 
   // Same texture-loading pattern as the primary asset above, for each additionally
   // layered item. Keyed on a stable string derived from (id, preview_url) pairs rather
   // than the array itself, since the caller passes a freshly-built array every render.
-  const additionalItemsKey = additionalNecklaceItems.map((item) => `${item.jewelleryId}:${item.asset?.preview_url ?? ""}`).join("|");
+  const additionalItemsKey = additionalNecklaceItems
+    .map((item) => `${item.jewelleryId}:${item.asset?.preview_url ?? ""}:${item.categorySlug ?? ""}:${item.physicalWidthMm ?? ""}`)
+    .join("|");
   useEffect(() => {
     let cancelled = false;
     const nextIds = new Set(additionalNecklaceItems.map((item) => item.jewelleryId));
@@ -436,10 +488,15 @@ export function useLiveArSession({
     for (const item of additionalNecklaceItems) {
       if (!item.asset || !item.asset.preview_url) continue;
       if (additionalGeometryRef.current.has(item.jewelleryId)) continue;
-      loadJewelleryAssetTexture(item.asset, item.asset.preview_url)
+      loadJewelleryAssetTexture(item.asset, item.asset.preview_url, item.physicalWidthMm ?? null)
         .then((loaded) => {
           if (cancelled) return;
-          additionalGeometryRef.current.set(item.jewelleryId, loaded);
+          // Additional layered neck items are only ever used in necklace mode (see
+          // this prop's own doc comment) -- "necklace" is hardcoded here, not read from
+          // the outer `category`, so an already-loaded additional item's attachment
+          // model/strips don't need recomputing if the primary happened to switch to
+          // earrings (additionalNecklaceItems would be empty then anyway).
+          additionalGeometryRef.current.set(item.jewelleryId, resolveLoadedTexture(loaded, "necklace", item.categorySlug ?? null));
         })
         .catch(() => {
           // Best-effort: an additional layered item that fails to load simply doesn't
@@ -501,10 +558,14 @@ export function useLiveArSession({
       }
 
       const loaded = assetGeometryRef.current;
-      let overlays: { image: HTMLImageElement; transform: LiveTransform; opacity: number }[] = [];
+      let overlays: { image: HTMLImageElement; transform: LiveTransform; opacity: number; strips: JewelleryStrip[] | null }[] = [];
       let primaryStatus: TrackingStatus = "TRACKING_LOST";
 
       if (loaded) {
+        // M6.5: an explicit necklaceLength override (rare -- see its own doc comment)
+        // wins; otherwise use the length this item's OWN attachment model resolved
+        // (null for earrings -- planCategoryRenders' length param is a no-op there).
+        const resolvedNecklaceLength = necklaceLength ?? loaded.attachmentModel?.necklaceLengthKey ?? null;
         const plans = planCategoryRenders(
           category,
           loaded.geometry,
@@ -512,7 +573,7 @@ export function useLiveArSession({
           pose,
           videoWidthPx,
           videoHeightPx,
-          necklaceLength,
+          resolvedNecklaceLength,
           debugNeckFractionOverrideRef.current ?? undefined,
           debugNeckHorizontalOffsetOverrideRef.current ?? undefined
         );
@@ -526,7 +587,7 @@ export function useLiveArSession({
           const result = slot.trackingMachine.update(frameStartMs, smoothed);
           if (index === 0) primaryStatus = result.status;
           if (result.transform === null || result.opacity <= 0) return [];
-          return [{ image: loaded.image, transform: result.transform, opacity: result.opacity }];
+          return [{ image: loaded.image, transform: result.transform, opacity: result.opacity, strips: loaded.strips }];
         });
       }
 
@@ -546,7 +607,7 @@ export function useLiveArSession({
             pose,
             videoWidthPx,
             videoHeightPx,
-            necklaceLength,
+            necklaceLength ?? additionalLoaded.attachmentModel?.necklaceLengthKey ?? null,
             debugNeckFractionOverrideRef.current ?? undefined,
             debugNeckHorizontalOffsetOverrideRef.current ?? undefined,
             (additionalIndex + 1) * NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH
@@ -561,7 +622,7 @@ export function useLiveArSession({
           const smoothed = plan?.transform ? smoothTransform(slot.smoother, plan.transform, dtMs) : null;
           const result = slot.trackingMachine.update(frameStartMs, smoothed);
           if (result.transform === null || result.opacity <= 0) return;
-          overlays.push({ image: additionalLoaded.image, transform: result.transform, opacity: result.opacity });
+          overlays.push({ image: additionalLoaded.image, transform: result.transform, opacity: result.opacity, strips: additionalLoaded.strips });
         });
       }
       const t2 = performance.now();
@@ -673,7 +734,7 @@ export function useLiveArSession({
                   y: necklaceOverlay.transform.anchorPx.y - bboxPx[1],
                 },
               };
-              drawJewelleryOverlay(localCtx, necklaceOverlay.image, localTransform, 1);
+              drawJewelleryOverlay(localCtx, necklaceOverlay.image, localTransform, 1, necklaceOverlay.strips);
 
               // Downscale (general case, including a bbox partially clipped by the
               // mask/frame edge): computeAlphaDownscaleSourceRect (occlusion.ts, pure,
@@ -777,7 +838,8 @@ export function useLiveArSession({
               latestMask.maskWidthPx,
               latestMask.maskHeightPx,
               videoWidthPx,
-              videoHeightPx
+              videoHeightPx,
+              necklaceOverlay.strips
             );
             occludedNecklaceCanvas = scratchCanvas;
 
@@ -870,7 +932,7 @@ export function useLiveArSession({
         if (index === 0 && occludedNecklaceCanvas) {
           ctx.drawImage(occludedNecklaceCanvas, 0, 0);
         } else {
-          drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity);
+          drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity, overlay.strips);
         }
       });
       const t3 = performance.now();

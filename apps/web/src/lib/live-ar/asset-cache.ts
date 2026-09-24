@@ -79,7 +79,14 @@ export function computeAlphaBoundingBox(image: HTMLImageElement): [number, numbe
   return [left, top, right + 1, bottom + 1];
 }
 
-function computeGeometry(image: HTMLImageElement, asset: AssetResponse): JewelleryAssetGeometry {
+/** `physicalWidthMm` (M6.5 spec Step 6, "physical dimensions already exist in the
+ * catalogue -- use them") lives on the PARENT `Jewellery` row (`JewelleryResponse`),
+ * not on the individual `AssetResponse` this function otherwise reads -- the catalogue
+ * API's per-asset endpoint has no such column. Callers pass it in explicitly, sourced
+ * from whichever `JewelleryResponse` the selected asset belongs to (see
+ * useLiveArSession.ts / LiveArStudio.tsx). `null`/`undefined` (the default) preserves
+ * the exact pre-M6.5 behavior: computeScale()'s relative-scale fallback drives sizing. */
+export function computeGeometry(image: HTMLImageElement, asset: AssetResponse, physicalWidthMm: number | null): JewelleryAssetGeometry {
   const width = image.naturalWidth;
   const height = image.naturalHeight;
   const alphaBbox = computeAlphaBoundingBox(image);
@@ -103,25 +110,29 @@ function computeGeometry(image: HTMLImageElement, asset: AssetResponse): Jewelle
     anchorPx,
     anchorSource,
     mirrorable: asset.mirrorable,
-    // Not exposed by the catalogue API (no physical-dimension column exists yet) -- the
-    // relative-scale fallback in computeScale() is what actually drives Live AR sizing
-    // today. See geometry.ts's computeScale docstring.
-    physicalWidthMm: null,
+    physicalWidthMm: physicalWidthMm ?? null,
   };
 }
 
 /** Loads (or returns the cached) image + computed geometry for a jewellery asset.
- * `previewUrl` is the signed URL from GET /catalog/assets/{id}. Never call this per
- * frame -- call it once when the jewellery selection changes, and hold the result. */
+ * `previewUrl` is the signed URL from GET /catalog/assets/{id}. `physicalWidthMm` is the
+ * PARENT jewellery item's `physical_width_mm` (M6.5 Step 6 -- see computeGeometry's own
+ * doc comment); omit/pass null when it isn't known or the caller doesn't have it. Never
+ * call this per frame -- call it once when the jewellery selection changes, and hold the
+ * result. Cached by asset id only: if the SAME asset were ever loaded once without a
+ * physical width and again with one, the first cached entry would win -- not a real
+ * concern in practice, since a given asset's parent jewellery item's physical dimensions
+ * don't change within a session. */
 export function loadJewelleryAssetTexture(
   asset: AssetResponse,
-  previewUrl: string
+  previewUrl: string,
+  physicalWidthMm: number | null = null
 ): Promise<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry }> {
   const cacheKey = asset.id;
   const existing = cache.get(cacheKey);
   if (existing) return existing;
 
-  const promise = loadImage(previewUrl).then((image) => ({ image, geometry: computeGeometry(image, asset) }));
+  const promise = loadImage(previewUrl).then((image) => ({ image, geometry: computeGeometry(image, asset, physicalWidthMm) }));
   cache.set(cacheKey, promise);
   // If loading fails, don't poison the cache -- a retry (e.g. after network recovery)
   // should be able to try again rather than being stuck on a rejected promise forever.
