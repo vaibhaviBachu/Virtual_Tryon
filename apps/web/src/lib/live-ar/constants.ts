@@ -209,3 +209,12 @@ export const NECKLACE_YAW_SHIFT_STRENGTH = 0.6;
 // this floor is a deliberate, documented simplification, not a claim of physical
 // accuracy at extreme angles.
 export const NECKLACE_MIN_HORIZONTAL_FORESHORTEN = 0.6;
+
+// --- M6.8 (three/three-transform.ts): converts geometry.ts's estimateHeadYawAsymmetry
+// proxy (roughly [-1, 1], a 2D landmark-asymmetry heuristic -- see that function's own
+// doc comment) into an actual yaw ANGLE for the 3D mesh's rotation. UNCALIBRATED --
+// there is no real 3D head-pose measurement in this pipeline (MediaPipe's
+// outputFacialTransformationMatrixes would give one but isn't wired in -- see the M6.6
+// report), so this is a documented approximation, not a claim that asymmetry=1 means
+// exactly this many real degrees of head turn. ---
+export const NECKLACE_3D_YAW_SENSITIVITY_DEGREES = 45;

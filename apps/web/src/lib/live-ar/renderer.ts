@@ -250,6 +250,42 @@ export function drawOccludedJewelleryOverlay(
   offscreenCtx.restore();
 }
 
+/** M6.8 (spec Step 15): the 3D-rendering equivalent of `drawOccludedJewelleryOverlay`
+ * above, for a jewellery item rendered by the Three.js pipeline instead of the 2D
+ * sprite renderer. `threeCanvasSource` is the ALREADY-RENDERED Three.js output --
+ * the 3D camera's own projection already placed/scaled/rotated the mesh correctly
+ * (three/three-transform.ts), so unlike the 2D path, NO additional translate/rotate/
+ * scale is applied here; this function only handles opacity + the SAME
+ * destination-out erase step `drawOccludedJewelleryOverlay` uses, reusing the
+ * EXISTING occlusion mask machinery verbatim (spec Step 15: "do not rewrite the
+ * entire occlusion architecture" -- this reuses 100% of it, only the source of the
+ * jewellery pixels differs). `threeCanvasSource` must already be sized to
+ * `outputWidthPx`/`outputHeightPx` (the full video frame -- the 3D camera's viewport
+ * IS the video viewport, see three-camera.ts). */
+export function compositeOccluded3dOverlay(
+  offscreenCtx: CanvasRenderingContext2D,
+  threeCanvasSource: CanvasImageSource,
+  opacity: number,
+  eraseMaskSource: CanvasImageSource,
+  eraseMaskWidthPx: number,
+  eraseMaskHeightPx: number,
+  outputWidthPx: number,
+  outputHeightPx: number
+): void {
+  const clampedOpacity = Math.max(0, Math.min(1, opacity));
+  offscreenCtx.clearRect(0, 0, outputWidthPx, outputHeightPx);
+  if (clampedOpacity > 0) {
+    offscreenCtx.save();
+    offscreenCtx.globalAlpha = clampedOpacity;
+    offscreenCtx.drawImage(threeCanvasSource, 0, 0, outputWidthPx, outputHeightPx);
+    offscreenCtx.restore();
+  }
+  offscreenCtx.save();
+  offscreenCtx.globalCompositeOperation = "destination-out";
+  offscreenCtx.drawImage(eraseMaskSource, 0, 0, eraseMaskWidthPx, eraseMaskHeightPx, 0, 0, outputWidthPx, outputHeightPx);
+  offscreenCtx.restore();
+}
+
 /** Draws a pre-built segmentation-mask canvas (see useLiveArSession.ts -- it owns and
  * reuses ONE scratch canvas across frames, per Step 5's "avoid unnecessary canvas
  * allocations every frame"; this function never creates one itself) onto the main

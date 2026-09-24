@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  compositeOccluded3dOverlay,
   drawJewelleryOverlay,
   drawOccludedJewelleryOverlay,
   drawSegmentationDebugOverlay,
@@ -232,6 +233,39 @@ describe("drawOccludedJewelleryOverlay", () => {
     const { ctx } = makeFakeCtx();
     drawOccludedJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1, {} as CanvasImageSource, 256, 256, 640, 480, null, 0.7);
     expect(ctx.scale).toHaveBeenCalledWith(2 * 0.7, 2);
+  });
+});
+
+// M6.8 (spec Step 15): the 3D-rendering equivalent of drawOccludedJewelleryOverlay --
+// no translate/rotate/scale (the Three.js camera already placed the mesh), only
+// opacity + the SAME destination-out erase step.
+describe("compositeOccluded3dOverlay", () => {
+  it("draws the already-rendered 3D canvas directly (no transform calls at all), then erases with destination-out -- in that order", () => {
+    const { ctx, calls, compositeOpAtDrawImage } = makeFakeCtx();
+    const threeCanvas = {} as CanvasImageSource;
+    const eraseMaskSource = {} as CanvasImageSource;
+    compositeOccluded3dOverlay(ctx, threeCanvas, 1, eraseMaskSource, 256, 256, 640, 480);
+    expect(calls).toEqual(["clearRect", "save", "drawImage", "restore", "save", "drawImage", "restore"]);
+    expect(compositeOpAtDrawImage).toEqual(["source-over", "destination-out"]);
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, threeCanvas, 0, 0, 640, 480);
+    expect(ctx.drawImage).toHaveBeenLastCalledWith(eraseMaskSource, 0, 0, 256, 256, 0, 0, 640, 480);
+  });
+
+  it("applies opacity via globalAlpha, clamped to [0, 1]", () => {
+    const { ctx } = makeFakeCtx();
+    compositeOccluded3dOverlay(ctx, {} as CanvasImageSource, 0.4, {} as CanvasImageSource, 256, 256, 640, 480);
+    expect(ctx.globalAlpha).toBeCloseTo(0.4, 6);
+
+    const { ctx: ctx2 } = makeFakeCtx();
+    compositeOccluded3dOverlay(ctx2, {} as CanvasImageSource, 5, {} as CanvasImageSource, 256, 256, 640, 480);
+    expect(ctx2.globalAlpha).toBe(1);
+  });
+
+  it("still clears and attempts the erase step even at zero opacity, skipping only the 3D canvas draw", () => {
+    const { ctx, calls, compositeOpAtDrawImage } = makeFakeCtx();
+    compositeOccluded3dOverlay(ctx, {} as CanvasImageSource, 0, {} as CanvasImageSource, 256, 256, 640, 480);
+    expect(calls).toEqual(["clearRect", "save", "drawImage", "restore"]);
+    expect(compositeOpAtDrawImage).toEqual(["destination-out"]);
   });
 });
 

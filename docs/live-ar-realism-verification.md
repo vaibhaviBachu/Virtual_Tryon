@@ -1494,3 +1494,150 @@ before Steps 12-14 (POC real-device test, before/after comparison, 3D performanc
 can be performed; none was fabricated. `src/lib/live-ar`: 342 → **350** (+8). Full web
 suite: **391/391**. `tsc`/lint/build all clean (zero new lint findings — this round
 touched no component/JSX files at all). **STOP — do not begin M6.8.**
+
+## 21. M6.8 — production 3D jewellery live AR (fast-track implementation)
+
+Per the M6.8 request's own Step 4/28: no real GLB jewellery asset exists in this
+repository (re-confirmed by direct search — still true). Built the "production 3D
+rendering foundation" the request's Step 3/4 asks for regardless — a real, working,
+partially real-browser-verified Three.js/WebGL2 pipeline — then **stopped exactly at
+the visual-validation gate** (Step 4 item 8 / Step 28 item 1), per its own explicit
+instruction. Steps 22-25 (real Diamond Choker device test, realism comparison against
+a real chain, performance target against a real device) are **not performed** — there
+is no real jewellery asset to test.
+
+### What was implemented (Steps 3-17)
+
+`apps/web/src/lib/live-ar/three/`:
+- `three-types.ts` — the coordinate-system contract (spec Step 8), documented
+  explicitly: units (mm), world space (Three.js's own right-handed Y-up default),
+  origin (camera at world origin), camera forward (-Z), FOV (assumed, documented why
+  the choice doesn't bias on-screen size).
+- `three-transform.ts` — pure math, fully unit-tested without any browser/WebGL:
+  `computeVirtualDepthMm` derives the mesh's camera distance FROM the existing,
+  already-real-device-validated 2D scale factor (never an independent, unverified 3D
+  calibration); `unprojectScreenPointAtDepth` maps the existing 2D anchor pixel to a
+  3D world point; `composeJewelleryQuaternion`/`yawAsymmetryToRadians` build the
+  mesh's rotation from the SAME roll (shoulder tilt) and yaw (`estimateHeadYawAsymmetry`)
+  signals M6.6 already computes, with pitch always exactly 0 (never fabricated — no
+  real pitch signal exists anywhere in this pipeline, spec Step 10's own instruction);
+  `computeMeshScaleFactor` reuses the catalogue's real physical dimensions;
+  `projectWorldBoundingBoxToScreen` is the 3D equivalent of `computeTransformedBoundingBox`,
+  for the occlusion alpha-footprint scoping Step 15 needs.
+- `three-camera.ts` — the persistent `PerspectiveCamera`, built from the REAL video
+  viewport aspect ratio, never recreated per frame.
+- `three-asset-loader.ts` — `GLTFLoader` + URL-keyed cache (never reloads/reparses a
+  cached URL) + `cloneGltfInstance` (each simultaneously-worn item gets its own
+  `Object3D`, sharing GPU geometry/material with the cached master by reference) +
+  `clearGltfAssetCache` (the ONLY place actual `.dispose()` calls happen — disposing a
+  per-instance clone never frees the shared master's resources, a real correctness
+  distinction documented in the module's own file docstring).
+- `three-materials.ts` — `createFallbackGoldMaterial` (metallic≈1, non-zero roughness,
+  used ONLY when a mesh has no material at all — never overriding a real authored
+  one) + `isEveryMeshPbr` (a real, testable check).
+- `three-scene.ts` — persistent `Scene` + restrained key/fill lighting +
+  `applyEnvironmentLighting` (Three.js's own `RoomEnvironment` + `PMREMGenerator` — a
+  procedural library utility, not a fabricated content asset, satisfying spec Step
+  13's "environment lighting" without inventing/embedding an HDR file that doesn't
+  exist).
+- `three-renderer.ts` — the persistent `WebGLRenderer` (explicit WebGL2 request,
+  `alpha: true` for compositing, throws rather than silently degrading if WebGL2 is
+  unavailable) + `getThreeRenderStats` (real `renderer.info` numbers, spec Step 17).
+- `renderer.ts` gained `compositeOccluded3dOverlay` — the 3D equivalent of the
+  existing `drawOccludedJewelleryOverlay`, reusing the EXISTING occlusion mask/erase
+  machinery verbatim (spec Step 15: "do not rewrite the entire occlusion
+  architecture") — only the source of the jewellery pixels differs (a pre-rendered
+  Three.js canvas vs. a 2D sprite + strips); no additional 2D transform is applied
+  since the 3D camera projection already placed the mesh correctly.
+- `jewellery-representation.ts` (M6.7) extended with the full `Gltf3dAssetMetadata`
+  contract (spec Step 5) — `modelUrl`/`modelFormat`/reused physical dimensions/
+  `attachmentType`/`anchor`/`mirrorable`/`materialProfile`/optional admin scale-rotation
+  corrections. Resolution order unchanged: gltf-3d > layered-2.5d > flat-2d.
+- **Dependencies added**: `three@^0.186.1` (real dependency), `@types/three@^0.186.0`
+  (dev dependency). No React Three Fiber (per the request's own preference for direct
+  integration). No WebGPU.
+
+**Deliberately NOT wired into `useLiveArSession.ts`'s render loop** — same discipline
+as M6.7's representation resolver: every 3D branch would be dead code with no real
+asset to select it (`resolveJewelleryRepresentation` still always returns `flat-2d`
+today). Wiring happens once a real GLB exists to select.
+
+### Real-browser verification (beyond `vitest run`)
+
+This project's `vitest`/jsdom suite cannot exercise real WebGL2 (`canvas.getContext
+("webgl2")` returns `null` in jsdom — confirmed directly, the same category of gap
+`occlusion-pixel.test.ts` hit for Canvas 2D before `node-canvas` was added there;
+there is no equivalently lightweight drop-in for WebGL2). Rather than leave the
+GPU-dependent code entirely unverified, a headless Chromium (via `playwright`,
+downloaded ad hoc for this session only — **not** added to this project's
+dependencies or test suite; see "why not permanent" below) actually ran the real
+`WebGLRenderer`/`GLTFLoader`/`PMREMGenerator`/compositing code paths, using a generic
+GENERIC test fixture (a plain box with a gold-toned PBR material) exported to real
+GLB bytes via `GLTFExporter` — **never presented as jewellery, never part of the
+committed test suite**, purely to prove the infrastructure functions. Confirmed, with
+real pixel readback (not just "no exception thrown"):
+- A real WebGL2 context is obtained (`isWebGL2: true`).
+- `PMREMGenerator`/`RoomEnvironment` environment lighting runs without error.
+- A GLB exported via `GLTFExporter` loads back correctly via `GLTFLoader` (1996 real
+  bytes, 1 mesh recovered, `renderStats: {drawCalls: 1, triangles: 12}` — exactly a
+  box's 12 triangles, confirming the geometry round-tripped correctly).
+- The rendered pixel at the mesh's screen position is opaque and colored
+  (`[255, 255, 101, 255]`); a corner with nothing drawn is fully transparent
+  (`[0, 0, 0, 0]`) — real evidence of an alpha-correct transparent render, not
+  assumed.
+- Compositing that WebGL canvas onto a separate Canvas 2D canvas (via `drawImage`,
+  spec Step 7's architecture) shows the rendered mesh where it was drawn and the
+  underlying "camera frame" showing through everywhere else — the exact compositing
+  behavior `compositeOccluded3dOverlay` depends on.
+- One transient run hit a software-WebGL context-lost/restored cycle (a known
+  characteristic of SwiftShader software rendering under some launch flags, not a
+  bug in this project's code) — resolved by a short render-retry loop in the
+  verification harness; noted honestly rather than hidden, and not something the
+  production code itself needs to handle differently (a real GPU-backed browser on
+  an actual device does not hit this).
+
+**Why this stays ad hoc, not a permanent project dependency**: adding Playwright +
+Chromium (~200MB of browser binaries) to this project's committed test suite is a
+materially heavier, more consequential infrastructure decision than this milestone's
+own scope — every future contributor would need to download that to run `npm test`.
+The verification above gives real confidence the foundation works without imposing
+that cost permanently; this is a deliberate, explained choice, reversible if a future
+milestone decides the ongoing cost is worth it.
+
+### Tests
+
+New: `three-transform.test.ts` (25), `three-camera.test.ts` (6), `three-materials.test.ts`
+(9), `three-asset-loader.test.ts` (10, using REAL exported GLB bytes via `GLTFExporter`
++ `data:` URLs — no mocking of the loader itself), `three-scene.test.ts` (5),
+`three-renderer.test.ts` (2, the one function testable without WebGL), plus
+`compositeOccluded3dOverlay` tests in `renderer.test.ts` (+3) and extended
+`jewellery-representation.test.ts` (+1). `src/lib/live-ar`: 350 → **411** (+61). Full
+web suite: **452** (451 passing + 1 pre-existing flaky test — confirmed, by re-running
+at the pre-M6.8 commit under the identical full-parallel load, to already fail
+intermittently at baseline; not a regression — see the M6.8 commit for the exact
+repro). `tsc`: clean. `npm run build`: succeeds, same 7 routes. Lint: 2 pre-existing
+warnings only, zero new (one incidental new warning from a test file was found and
+fixed during this same round — an unused `three` import).
+
+### Q. Remaining blockers
+
+1. **No real GLB jewellery asset exists** — the actual blocker for Steps 11-14/22-25.
+   `docs/jewellery-3d-asset-spec.md` specifies exactly what is needed for the Diamond
+   Choker (Step 6/22's Phase A target).
+2. The DB schema has no column for a 3D asset reference yet, and no admin upload flow
+   for one exists — `jewellery-representation.ts`'s `Gltf3dAssetMetadata` documents
+   the target shape; wiring the actual migration/API/admin UI is not done here (out of
+   this milestone's own scope — Step 19 says "extend catalogue representation only as
+   much as necessary," and there is no real asset yet to justify it).
+3. `useLiveArSession.ts` has no 3D branch wired in yet (deliberately, per above).
+
+### R. Exact next step
+
+Do not start M6.9. Per the request's own Step 28/30: **the next step is producing (or
+commissioning) one real GLB for the Diamond Choker**, following
+`docs/jewellery-3d-asset-spec.md`. Once it exists: (a) add the DB column + admin
+upload path for it, (b) wire `resolveJewelleryRepresentation`'s `gltf3dAsset` input
+from that real data, (c) branch `useLiveArSession.ts`'s render loop on `.type ===
+"gltf-3d"` calling into `three/`, (d) THEN perform Steps 12-14/22-25 (real headless-
+verified-in-code POC → real camera → real comparison → real performance) for the
+first time. **STOP — do not begin M6.9.**
