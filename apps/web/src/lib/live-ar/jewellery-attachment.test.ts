@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { CHOKER_ASPECT_RATIO_THRESHOLD, NECKLACE_CURVATURE_MAX_DROP_FRACTION, NECKLACE_CURVATURE_STRIP_COUNT } from "@/lib/live-ar/constants";
+import {
+  CHOKER_ASPECT_RATIO_THRESHOLD,
+  NECKLACE_CURVATURE_HALF_ANGLE_RADIANS,
+  NECKLACE_CURVATURE_MAX_DROP_FRACTION,
+  NECKLACE_CURVATURE_STRIP_COUNT,
+} from "@/lib/live-ar/constants";
 import { resolveNecklaceAttachmentClass, resolveNecklaceAttachmentModel } from "@/lib/live-ar/jewellery-attachment";
 import type { JewelleryAssetGeometry } from "@/lib/live-ar/types";
 
@@ -58,21 +63,33 @@ describe("resolveNecklaceAttachmentModel", () => {
   it("resolves a choker's curvature/length key from constants.ts, not an invented value", () => {
     const model = resolveNecklaceAttachmentModel("necklace", geometryWithBbox(400, 40));
     expect(model.attachmentClass).toBe("choker");
-    expect(model.curvature).toEqual({ maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION.choker, stripCount: NECKLACE_CURVATURE_STRIP_COUNT });
+    expect(model.curvature).toEqual({
+      maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION.choker,
+      stripCount: NECKLACE_CURVATURE_STRIP_COUNT,
+      curvatureHalfAngleRadians: NECKLACE_CURVATURE_HALF_ANGLE_RADIANS.choker,
+    });
     expect(model.necklaceLengthKey).toBe("short");
   });
 
   it("resolves a haaram's curvature/length key from constants.ts", () => {
     const model = resolveNecklaceAttachmentModel("haaram", geometryWithBbox(200, 800));
     expect(model.attachmentClass).toBe("haaram");
-    expect(model.curvature).toEqual({ maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION.haaram, stripCount: NECKLACE_CURVATURE_STRIP_COUNT });
+    expect(model.curvature).toEqual({
+      maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION.haaram,
+      stripCount: NECKLACE_CURVATURE_STRIP_COUNT,
+      curvatureHalfAngleRadians: NECKLACE_CURVATURE_HALF_ANGLE_RADIANS.haaram,
+    });
     expect(model.necklaceLengthKey).toBe("long");
   });
 
   it("resolves an ordinary necklace's curvature/length key from constants.ts", () => {
     const model = resolveNecklaceAttachmentModel("necklace", geometryWithBbox(200, 300));
     expect(model.attachmentClass).toBe("necklace");
-    expect(model.curvature).toEqual({ maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION.necklace, stripCount: NECKLACE_CURVATURE_STRIP_COUNT });
+    expect(model.curvature).toEqual({
+      maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION.necklace,
+      stripCount: NECKLACE_CURVATURE_STRIP_COUNT,
+      curvatureHalfAngleRadians: NECKLACE_CURVATURE_HALF_ANGLE_RADIANS.necklace,
+    });
     expect(model.necklaceLengthKey).toBe("medium");
   });
 });

@@ -42,6 +42,16 @@ export interface FrameSample {
    * per that step's explicit "measure the cost... do not introduce an expensive
    * operation without measuring it." Same exclude-don't-zero convention as the others. */
   alphaMaskMs?: number | null;
+  /** M6.6 spec Step 14: the cost of computing this frame's yaw-responsive strip/
+   * foreshorten plan (geometry.ts's estimateHeadYawAsymmetry + jewellery-deformation.ts's
+   * computeJewelleryStrips, for the primary necklace item and every additional layered
+   * item) -- a SUBSET of `geometryMs` above (same "sub-timing also counted in its
+   * parent" convention `alphaMaskMs` already has relative to `occlusionMs`), measured
+   * separately so a real device can see whether this specific new-this-milestone cost
+   * is negligible or not, rather than guessing from `geometryMs` alone. `null`/
+   * `undefined` on a frame with no necklace overlay at all (earrings mode, or no asset
+   * loaded) -- same exclude-don't-zero convention as the others. */
+  deformationMs?: number | null;
 }
 
 /** Real min/median/average/p95/max over a set of real recorded timings -- Step 10's
@@ -80,6 +90,8 @@ export interface PerformanceSnapshot {
   poseDetect: TimingStats;
   /** 2026-09-24 controlled real-device validation Step 13: see FrameSample.alphaMaskMs. */
   alphaMask: TimingStats;
+  /** M6.6 spec Step 14: see FrameSample.deformationMs. */
+  deformation: TimingStats;
 }
 
 const EMPTY_SNAPSHOT: PerformanceSnapshot = {
@@ -96,6 +108,7 @@ const EMPTY_SNAPSHOT: PerformanceSnapshot = {
   faceDetect: EMPTY_TIMING_STATS,
   poseDetect: EMPTY_TIMING_STATS,
   alphaMask: EMPTY_TIMING_STATS,
+  deformation: EMPTY_TIMING_STATS,
 };
 
 function average(values: number[]): number {
@@ -170,6 +183,9 @@ export class PerformanceTracker {
     const alphaMaskTimes = this.samples
       .map((s) => s.alphaMaskMs)
       .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+    const deformationTimes = this.samples
+      .map((s) => s.deformationMs)
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
     return {
       fps: avgFrameMs > 0 ? 1000 / avgFrameMs : 0,
       avgFrameMs,
@@ -184,6 +200,7 @@ export class PerformanceTracker {
       faceDetect: computeTimingStats(faceDetectTimes),
       poseDetect: computeTimingStats(poseDetectTimes),
       alphaMask: computeTimingStats(alphaMaskTimes),
+      deformation: computeTimingStats(deformationTimes),
     };
   }
 
@@ -261,5 +278,17 @@ export function formatTrackingBreakdownText(snapshot: PerformanceSnapshot): stri
     `Tracking breakdown -- ` +
     `Face: n=${snapshot.faceDetect.sampleCount} avg=${snapshot.faceDetect.avgMs.toFixed(1)}ms p95=${snapshot.faceDetect.p95Ms.toFixed(1)}ms / ` +
     `Pose: n=${snapshot.poseDetect.sampleCount} avg=${snapshot.poseDetect.avgMs.toFixed(1)}ms p95=${snapshot.poseDetect.p95Ms.toFixed(1)}ms`
+  );
+}
+
+/** M6.6 spec Step 14: the real, measured cost of this frame's yaw-responsive strip/
+ * foreshorten recomputation (see FrameSample.deformationMs's own doc comment for why
+ * this is a SUBSET of Geometry above, not an additional cost on top of it). Kept as
+ * its own function for the same reason formatTrackingBreakdownText is above. */
+export function formatDeformationDebugText(snapshot: PerformanceSnapshot): string {
+  if (snapshot.deformation.sampleCount === 0) return "Deformation: no samples yet (earrings mode, or no necklace loaded)";
+  return (
+    `Deformation (subset of Geometry above): ` +
+    `n=${snapshot.deformation.sampleCount} avg=${snapshot.deformation.avgMs.toFixed(3)}ms p95=${snapshot.deformation.p95Ms.toFixed(3)}ms`
   );
 }

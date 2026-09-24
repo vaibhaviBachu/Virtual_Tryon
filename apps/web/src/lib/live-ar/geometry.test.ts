@@ -15,7 +15,9 @@ import {
   computeRotation,
   computeScale,
   computeTransformedBoundingBox,
+  estimateHeadYawAsymmetry,
   planCategoryRenders,
+  resolveEarConfidence,
 } from "@/lib/live-ar/geometry";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LiveTransform, LivePoseLandmarks, NormalizedPoint } from "@/lib/live-ar/types";
 
@@ -451,5 +453,53 @@ describe("M6.2 regression: adding landmark z must not move anything that renders
     const withZ = computeNecklaceRotation({ landmarks: landmarksWithZ, confidence: 0.9 }, 1000, 1000);
 
     expect(withZ).toEqual(withoutZ);
+  });
+});
+
+// M6.6 (docs/live-ar-realism-verification.md §19): estimateHeadYawAsymmetry is extracted
+// from the SAME landmark math resolveEarConfidence already used (see this module's file
+// docstring on why duplicating that math is a real, previously-hit bug class) -- these
+// tests cover both the new export directly and that the extraction left
+// resolveEarConfidence's own behavior unchanged.
+describe("estimateHeadYawAsymmetry (M6.6)", () => {
+  it("is exactly 0 for a face whose edge landmarks are equidistant from the nose (straight-on)", () => {
+    expect(estimateHeadYawAsymmetry(faceWithEars())).toBeCloseTo(0, 10);
+  });
+
+  it("is positive when the screen-right edge landmark is farther from the nose than the screen-left one", () => {
+    const face = faceWithEars();
+    face.landmarks[454] = { x: 0.9, y: 0.5 }; // push the screen-right edge further away
+    const asymmetry = estimateHeadYawAsymmetry(face);
+    expect(asymmetry).toBeGreaterThan(0);
+  });
+
+  it("is negative when the screen-left edge landmark is farther from the nose than the screen-right one", () => {
+    const face = faceWithEars();
+    face.landmarks[234] = { x: 0.1, y: 0.5 }; // push the screen-left edge further away
+    const asymmetry = estimateHeadYawAsymmetry(face);
+    expect(asymmetry).toBeLessThan(0);
+  });
+
+  it("returns null when no face is tracked, never a fabricated angle", () => {
+    expect(estimateHeadYawAsymmetry(null)).toBeNull();
+  });
+
+  it("stays within [-1, 1] (a normalized asymmetry ratio, not an unbounded distance)", () => {
+    const face = faceWithEars();
+    face.landmarks[454] = { x: 0.99, y: 0.5 };
+    const asymmetry = estimateHeadYawAsymmetry(face)!;
+    expect(asymmetry).toBeGreaterThanOrEqual(-1);
+    expect(asymmetry).toBeLessThanOrEqual(1);
+  });
+
+  it("matches the sign relationship resolveEarConfidence already documents: the more-turned-away side's confidence drops", () => {
+    const face = faceWithEars();
+    face.landmarks[454] = { x: 0.9, y: 0.5 }; // asymmetry > 0
+    const asymmetry = estimateHeadYawAsymmetry(face)!;
+    expect(asymmetry).toBeGreaterThan(0);
+    const confidences = resolveEarConfidence(face.landmarks, face.detectionConfidence)!;
+    // Positive asymmetry -> the LEFT ear's confidence is penalized (see resolveEarConfidence's
+    // `penalty = isLeft ? asymmetry : -asymmetry` -- extracted unchanged from this same asymmetry value).
+    expect(confidences.left).toBeLessThan(confidences.right);
   });
 });

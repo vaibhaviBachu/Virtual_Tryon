@@ -108,6 +108,26 @@ describe("drawJewelleryOverlay", () => {
       expect(ctx.drawImage).toHaveBeenCalledWith(expect.anything(), -10, -5);
     }
   });
+
+  // M6.6 (neck-projection.ts): horizontalForeshorten is an OPTIONAL trailing
+  // parameter, defaulting to 1 (a no-op) -- every M6.5 test above passes it implicitly.
+  it("defaults horizontalForeshorten to 1 (no-op) when omitted", () => {
+    const { ctx } = makeFakeCtx();
+    drawJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1);
+    expect(ctx.scale).toHaveBeenCalledWith(2, 2); // unchanged from baseTransform's own scaleFactor
+  });
+
+  it("multiplies only the local X scale by horizontalForeshorten, leaving Y untouched", () => {
+    const { ctx } = makeFakeCtx();
+    drawJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1, null, 0.7);
+    expect(ctx.scale).toHaveBeenCalledWith(2 * 0.7, 2);
+  });
+
+  it("applies horizontalForeshorten AFTER the mirror flip (mirrored + foreshortened both negate/scale the same X axis)", () => {
+    const { ctx } = makeFakeCtx();
+    drawJewelleryOverlay(ctx, {} as CanvasImageSource, { ...baseTransform, mirrored: true }, 1, null, 0.7);
+    expect(ctx.scale).toHaveBeenCalledWith(-2 * 0.7, 2);
+  });
 });
 
 describe("renderLiveFrame", () => {
@@ -139,6 +159,16 @@ describe("renderLiveFrame", () => {
     );
     // Call 1 is the video frame's own drawImage; call 2 is the (only) strip's.
     expect(ctx.drawImage).toHaveBeenNthCalledWith(2, expect.anything(), 0, 0, 10, 10, -10, -4, 10, 10);
+  });
+
+  it("forwards jewellery.horizontalForeshorten through to drawJewelleryOverlay", () => {
+    const { ctx } = makeFakeCtx();
+    renderLiveFrame(
+      ctx,
+      { video: {} as CanvasImageSource, videoWidthPx: 640, videoHeightPx: 480 },
+      { image: {} as CanvasImageSource, transform: baseTransform, opacity: 1, horizontalForeshorten: 0.7 }
+    );
+    expect(ctx.scale).toHaveBeenCalledWith(2 * 0.7, 2);
   });
 });
 
@@ -196,6 +226,12 @@ describe("drawOccludedJewelleryOverlay", () => {
       "restore",
     ]);
     expect(ctx.drawImage).toHaveBeenNthCalledWith(1, expect.anything(), 0, 0, 20, 20, -10, -3, 20, 20);
+  });
+
+  it("forwards horizontalForeshorten through to its internal drawJewelleryOverlay call", () => {
+    const { ctx } = makeFakeCtx();
+    drawOccludedJewelleryOverlay(ctx, {} as CanvasImageSource, baseTransform, 1, {} as CanvasImageSource, 256, 256, 640, 480, null, 0.7);
+    expect(ctx.scale).toHaveBeenCalledWith(2 * 0.7, 2);
   });
 });
 

@@ -45,12 +45,18 @@ export interface RenderableFrame {
 export function renderLiveFrame(
   ctx: CanvasRenderingContext2D,
   frame: RenderableFrame,
-  jewellery: { image: CanvasImageSource; transform: LiveTransform; opacity: number; strips?: JewelleryStrip[] | null } | null
+  jewellery: {
+    image: CanvasImageSource;
+    transform: LiveTransform;
+    opacity: number;
+    strips?: JewelleryStrip[] | null;
+    horizontalForeshorten?: number;
+  } | null
 ): void {
   ctx.clearRect(0, 0, frame.videoWidthPx, frame.videoHeightPx);
   ctx.drawImage(frame.video, 0, 0, frame.videoWidthPx, frame.videoHeightPx);
   if (jewellery !== null) {
-    drawJewelleryOverlay(ctx, jewellery.image, jewellery.transform, jewellery.opacity, jewellery.strips);
+    drawJewelleryOverlay(ctx, jewellery.image, jewellery.transform, jewellery.opacity, jewellery.strips, jewellery.horizontalForeshorten);
   }
 }
 
@@ -69,13 +75,19 @@ export function renderLiveFrame(
  * alpha-footprint local-canvas render) goes through, so curvature can never silently
  * drift between what's drawn, what's occluded, and what's alpha-footprint-measured --
  * the same "one source of truth for the transform" discipline M6.4's bounding-box bug
- * fix established, extended to cover curvature too. */
+ * fix established, extended to cover curvature too.
+ *
+ * `horizontalForeshorten` (M6.6, neck-projection.ts's computeHorizontalForeshorten):
+ * an extra multiplicative factor on ONLY the local X scale, modeling "viewed at an
+ * angle, so narrower than dead-on." Defaults to 1 (no-op, byte-for-byte pre-M6.6
+ * width) -- every M6.5 call site/test that doesn't pass it is unaffected. */
 export function drawJewelleryOverlay(
   ctx: CanvasRenderingContext2D,
   image: CanvasImageSource,
   transform: LiveTransform,
   opacity: number,
-  strips?: JewelleryStrip[] | null
+  strips?: JewelleryStrip[] | null,
+  horizontalForeshorten: number = 1
 ): void {
   const clampedOpacity = Math.max(0, Math.min(1, opacity));
   if (clampedOpacity <= 0) return;
@@ -84,7 +96,8 @@ export function drawJewelleryOverlay(
   ctx.globalAlpha = clampedOpacity;
   ctx.translate(transform.anchorPx.x, transform.anchorPx.y);
   ctx.rotate((transform.rotationDegrees * Math.PI) / 180);
-  ctx.scale(transform.mirrored ? -transform.scaleFactor : transform.scaleFactor, transform.scaleFactor);
+  const scaleX = (transform.mirrored ? -transform.scaleFactor : transform.scaleFactor) * horizontalForeshorten;
+  ctx.scale(scaleX, transform.scaleFactor);
   if (strips && strips.length > 0) {
     for (const strip of strips) {
       ctx.drawImage(
@@ -128,7 +141,13 @@ function drawDebugPoint(ctx: CanvasRenderingContext2D, point: PixelPoint, color:
  * docstring for why that's correct without any extra mirroring math here). This answers
  * "where does the algorithm THINK the neck is" visually, on the actual runtime frame --
  * not a synthetic fixture, not a unit test. Purely a diagnostic aid; never called unless
- * the caller explicitly enables debug mode (see useLiveArSession.ts). */
+ * the caller explicitly enables debug mode (see useLiveArSession.ts).
+ *
+ * M6.6 ("Wear Geometry Debug" -- spec Step 11) extends this SAME overlay (rather than
+ * adding a second, separate debug panel) with the neck-surface/contact-curve markers:
+ * left/right neck boundary points (neck-surface.ts's ellipse model) and the jewellery's
+ * actual per-strip contact curve (debug.ts's `contactCurvePx`, built from the SAME
+ * strip plan that was actually rendered this frame -- never a separate approximation). */
 export function drawNecklaceDebugOverlay(ctx: CanvasRenderingContext2D, snapshot: NecklaceDebugSnapshot): void {
   ctx.save();
   ctx.setLineDash([4, 4]);
@@ -146,6 +165,36 @@ export function drawNecklaceDebugOverlay(ctx: CanvasRenderingContext2D, snapshot
   ctx.strokeStyle = "yellow";
   ctx.strokeRect(l, t, r - l, b - t);
   ctx.restore();
+
+  // M6.6: neck surface boundary line (left neck boundary -> right neck boundary),
+  // drawn as its own distinct dashed line so it reads as "the ellipse's front-facing
+  // width" rather than being confused with the shoulder centerline above.
+  if (snapshot.leftNeckBoundaryPx && snapshot.rightNeckBoundaryPx) {
+    ctx.save();
+    ctx.setLineDash([2, 6]);
+    ctx.strokeStyle = "deepskyblue";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(snapshot.leftNeckBoundaryPx.x, snapshot.leftNeckBoundaryPx.y);
+    ctx.lineTo(snapshot.rightNeckBoundaryPx.x, snapshot.rightNeckBoundaryPx.y);
+    ctx.stroke();
+    ctx.restore();
+    drawDebugPoint(ctx, snapshot.leftNeckBoundaryPx, "deepskyblue", "LEFT NECK");
+    drawDebugPoint(ctx, snapshot.rightNeckBoundaryPx, "deepskyblue", "RIGHT NECK");
+  }
+
+  // M6.6: the jewellery's actual contact curve -- a connected polyline through every
+  // strip's real (post-yaw) contact point, the SAME points actually rendered this frame.
+  if (snapshot.contactCurvePx.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = "chartreuse";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(snapshot.contactCurvePx[0].x, snapshot.contactCurvePx[0].y);
+    for (const point of snapshot.contactCurvePx.slice(1)) ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (snapshot.faceCenterPx) drawDebugPoint(ctx, snapshot.faceCenterPx, "orange", "FACE CENTER");
   if (snapshot.leftEarPx) drawDebugPoint(ctx, snapshot.leftEarPx, "orange", "LEFT EAR");
@@ -190,10 +239,11 @@ export function drawOccludedJewelleryOverlay(
   eraseMaskHeightPx: number,
   outputWidthPx: number,
   outputHeightPx: number,
-  strips?: JewelleryStrip[] | null
+  strips?: JewelleryStrip[] | null,
+  horizontalForeshorten: number = 1
 ): void {
   offscreenCtx.clearRect(0, 0, outputWidthPx, outputHeightPx);
-  drawJewelleryOverlay(offscreenCtx, image, transform, opacity, strips);
+  drawJewelleryOverlay(offscreenCtx, image, transform, opacity, strips, horizontalForeshorten);
   offscreenCtx.save();
   offscreenCtx.globalCompositeOperation = "destination-out";
   offscreenCtx.drawImage(eraseMaskSource, 0, 0, eraseMaskWidthPx, eraseMaskHeightPx, 0, 0, outputWidthPx, outputHeightPx);

@@ -175,3 +175,37 @@ export const NECKLACE_CURVATURE_STRIP_COUNT = 20;
 // Documented heuristic, not a calibrated boundary: a choker band is typically much wider
 // than it is tall; ordinary necklace pendants/chains are closer to square or taller.
 export const CHOKER_ASPECT_RATIO_THRESHOLD = 0.35;
+
+// --- M6.6 (neck-projection.ts / jewellery-deformation.ts / neck-surface.ts): a
+// lightweight elliptical/cylindrical projection of the neck, so curvature responds to
+// real head yaw instead of a fixed, angle-blind parabola. UNCALIBRATED pending
+// real-camera verification, same status as every constant in this section. ---
+
+// How much of the neck's front-facing circumference each attachment class's contact
+// curve is modeled as wrapping, in radians (a HALF-angle either side of the contact
+// point). A choker sits close/flush against the neck, so it's modeled as wrapping more
+// of the visible front arc; a haaram's contact region (where it actually meets the
+// neck) is narrower -- most of its length hangs straight down below the curve, not
+// around it.
+export const NECKLACE_CURVATURE_HALF_ANGLE_RADIANS: Record<string, number> = {
+  choker: (70 * Math.PI) / 180,
+  necklace: (55 * Math.PI) / 180,
+  haaram: (40 * Math.PI) / 180,
+};
+
+// How strongly the estimated head-yaw asymmetry (geometry.ts's estimateHeadYawAsymmetry,
+// roughly [-1, 1]) shifts (a) the contact curve's peak away from the sprite's
+// horizontal center and (b) the whole-sprite horizontal foreshorten. 0 would mean
+// "ignore yaw entirely" (M6.5's exact behavior); 1 would let the contact peak reach all
+// the way to the curvature half-angle's own edge at maximum measured asymmetry. 0.6 is
+// a deliberately conservative starting fraction, chosen so a normal head turn produces
+// a visible but not extreme shift -- not derived from a real-camera measurement yet.
+export const NECKLACE_YAW_SHIFT_STRENGTH = 0.6;
+
+// Floor on the whole-sprite horizontal foreshorten factor (neck-projection.ts's
+// computeHorizontalForeshorten) -- never lets an extreme yaw reading collapse the
+// necklace to near-zero or negative width, which would look broken rather than
+// "viewed from an angle." A real cylinder viewed edge-on would approach zero width;
+// this floor is a deliberate, documented simplification, not a claim of physical
+// accuracy at extreme angles.
+export const NECKLACE_MIN_HORIZONTAL_FORESHORTEN = 0.6;

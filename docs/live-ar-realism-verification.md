@@ -1322,3 +1322,153 @@ milestone's success criteria (17 of 18 are engineering claims already checked ab
 #17, "real-device screenshots demonstrate the improvement," is yours to produce) are
 not performed from this sandbox. Per the M6.5 request's own instruction: **STOP here —
 do not begin M6.6.**
+
+## 19. M6.6 — physical neck contact, depth & wearing behavior
+
+### A. Why M6.5 still looked like a flat overlay (Step 1 audit)
+
+Traced the full M6.5 pipeline (body reference → neck reference → jewellery attachment
+→ strip deformation → transform → alpha footprint → occlusion → rendering) and found
+the real architectural gap, not a Y-coordinate bug:
+
+- **No neck SURFACE existed, only a neck POINT.** `NeckReferenceFrame` gave one
+  attachment pixel plus a diagnostic width scalar — never a coordinate system with
+  front/left/right regions (Step 1's literal checklist: neck surface, circumference,
+  depth, perspective, front/back relationship, contact region — **none of these
+  existed** before this milestone; this is the honest gap, not an approximation of one).
+- **M6.5's curvature bow was angle-BLIND.** `computeJewelleryStrips`'s parabola shape
+  was a fixed function of horizontal position only — identical on every frame
+  regardless of head yaw. Turning your head could never change the necklace's shape,
+  because nothing in the pipeline read a yaw signal at all.
+- **No perspective/foreshortening concept anywhere.** The transform is translate →
+  rotate → uniform scale; a uniform scale cannot make one side of the sprite narrower
+  than the other, which is what "viewed at an angle" actually requires.
+- M6.2's `shoulderDepth`/`bodyDepth` fields (real MediaPipe z) were computed but never
+  read by anything — confirmed by grep, same as M6.5's audit found.
+
+### B/C/D. The M6.6 model, algorithms considered, and what was chosen
+
+**Considered** (Step 3): (A) mesh-based 2D deformation, (B) piecewise-affine strips,
+(C) full Canvas mesh warp, (D) WebGL vertex deformation, (E) cylindrical/elliptical
+projection.
+
+**Chosen: (B) + (E) combined**, in `neck-projection.ts` (the shared math) +
+`jewellery-deformation.ts` (turns it into a strip plan):
+
+- The neck's cross-section is approximated as a semi-ellipse. Each attachment class
+  (choker/necklace/haaram) models its contact curve as wrapping a
+  `curvatureHalfAngleRadians` arc of that ellipse (`jewellery-attachment.ts`).
+- `geometry.ts`'s new `estimateHeadYawAsymmetry` (extracted from the SAME face-edge-
+  landmark math `resolveEarConfidence` already used — one source of truth, not a
+  duplicate) gives a real, per-frame, measured yaw PROXY (2D landmark asymmetry, not a
+  calibrated 3D angle — MediaPipe's `outputFacialTransformationMatrixes` would give a
+  real 3D pose but isn't wired in; documented as a deliberate scope decision, not an
+  oversight).
+- That yaw proxy shifts (1) WHERE the contact curve's peak sits within the sprite
+  (`computeContactPeakFraction` — Step 4's "contact curve must move with the neck"),
+  and (2) a whole-sprite horizontal foreshorten factor (`computeHorizontalForeshorten`
+  — Step 8's "apparent width changes appropriately with viewpoint"). Both are `cos`/
+  distance-from-contact-point functions of the SAME angle, never independently tuned.
+- **Rejected (D) WebGL**: explicitly ruled out by the request; Canvas 2D's existing
+  strip mechanism extends cleanly to carry this without a new rendering technology.
+- **Not attempted**: per-strip destination-width changes (a full asymmetric mesh
+  layout) — deliberately avoided in favor of ONE whole-sprite foreshorten scalar, to
+  keep the implementation a strict, byte-for-byte-at-yaw=0 generalization of M6.5
+  rather than a riskier full rewrite. Documented as a real simplification (see O below).
+
+### E. Files changed
+
+New: `neck-projection.ts` (shared angle/depth/foreshorten math), `neck-surface.ts`
+(debug-visualization neck boundary points), plus their test files.
+Edited: `geometry.ts` (`estimateHeadYawAsymmetry`, extracted not duplicated),
+`jewellery-attachment.ts` (`curvatureHalfAngleRadians` per class), `jewellery-
+deformation.ts` (yaw-aware, now returns `{strips, horizontalForeshorten,
+contactPeakFraction}`, recomputed every frame instead of cached per-asset-load),
+`renderer.ts` (`horizontalForeshorten` param, defaults to 1 = no-op), `debug.ts` (wear-
+geometry fields folded into the EXISTING `NecklaceDebugSnapshot`, not a second
+snapshot type), `performance.ts` (`deformationMs`/`formatDeformationDebugText`),
+`useLiveArSession.ts` / `LiveArStudio.tsx` (per-frame yaw estimation, comparison-mode
+toggle + `wearComparisonCanvasRef`).
+
+### F/G. Tests / count
+
+New: `neck-projection.test.ts` (15), `neck-surface.test.ts` (3), plus yaw-responsiveness
+tests added to `jewellery-deformation.test.ts`, `geometry.test.ts` (yaw asymmetry), 
+`renderer.test.ts` (`horizontalForeshorten`), `debug.test.ts` (wear-geometry fields),
+`performance.test.ts` (`deformationMs`). `src/lib/live-ar`: 301 → **342** (+41). Full
+web suite: **383/383**.
+
+### H/I. Build / lint
+
+`npx tsc --noEmit`: clean. `npm run build`: succeeds, same 7 routes. Lint: 53 → 56
+problems (+3), all confirmed (by diffing the exact flagged code text, not line
+numbers) to be the SAME already-documented `react-hooks/refs` collateral pattern
+(new ref writes / `<canvas ref={session.x}>` JSX in the same components) — zero new
+categories.
+
+### J/K. Real-device FPS / screenshots
+
+**Not performed** — same sandbox limitation as M6.5 (no camera). `deformationMs` is
+now instrumented (Step 14) specifically so this cost is visible once you do test on a
+real device — expected to be negligible (≤20 iterations of plain arithmetic per neck
+item per frame, no per-pixel work) but not claimed as such without a real number.
+
+### L/M/N. Per-attachment-class result
+
+Not observed on a real camera. What IS true by construction (verified by the pure-
+function tests, not a screenshot): a choker's curvature half-angle (70°) is wider than
+a haaram's (40°), so a choker's contact curve/foreshorten responds more to the same
+yaw than a haaram's does — see `neck-projection.test.ts`'s "a smaller curvature
+half-angle... foreshortens less" test. Whether this reads as visually correct on an
+actual person is exactly what Step 13's real-device test (below) answers.
+
+### O. Remaining limitations (Step 9/16)
+
+Unchanged from M6.5's list, plus this milestone's own new ones:
+- The yaw signal is a 2D landmark-asymmetry proxy, not a calibrated 3D head pose.
+- Foreshortening is ONE whole-sprite scalar, not a per-region asymmetric compression —
+  a real cylinder's near/far sides would compress by different amounts; this applies
+  the same factor to the whole piece.
+- The contact curve's peak-shift and the foreshorten are both driven by the SAME
+  yaw proxy but are not derived from a single unified 3D projection — two related
+  but separately-computed consequences of one angle, not one coherent 3D->2D mapping.
+- Still no true depth buffer, 3D mesh, back-side geometry, or lighting/material
+  response (Step 9's "cannot fully do" list, unchanged from M6.5).
+
+### P. What M6.7 should address
+
+Depends entirely on Step 13's real-device result (below):
+- If the yaw response looks directionally right but under/over-shoots: retune
+  `NECKLACE_YAW_SHIFT_STRENGTH`/`NECKLACE_CURVATURE_HALF_ANGLE_RADIANS` against a real
+  camera (documented as UNCALIBRATED, same status as every other visual constant here).
+- If foreshortening looks too uniform/flat: consider the per-region asymmetric
+  compression this milestone deliberately deferred (see O above) — now that the
+  simpler whole-sprite version's real limitation is visible on camera, not guessed at.
+- If contact placement still looks disconnected from the neck: revisit whether
+  `estimateHeadYawAsymmetry`'s 2D proxy is too noisy, and whether wiring MediaPipe's
+  `outputFacialTransformationMatrixes` (a real 3D head pose, available but unused) is
+  now justified by real evidence rather than speculative scope.
+
+### Real-device test protocol (Step 13) — for you to run, not predicted here
+
+1. Open `/try-on/live`, select a necklace, enable "Show necklace debug" (now includes
+   the M6.6 markers: deepskyblue neck-boundary line, chartreuse contact curve) and
+   "Show wear comparison (M6.5 vs M6.6)" (bottom-left thumbnail).
+2. **Tests 1-7** (straight/left/right/tilt/closer/farther/shoulders): for each, compare
+   the main canvas against the M6.5-equivalent thumbnail. Do NOT judge "is this
+   photorealistic" — judge whether the main view's necklace shape visibly differs from
+   the thumbnail's fixed shape when you turn your head, and whether that difference
+   goes the RIGHT direction (narrower/shifted toward the side you turned away from).
+3. **Tests 8-9** (hair beside/crossing): confirm M6.4 occlusion still works exactly as
+   before — hair should still erase the correct pixels regardless of the new curvature.
+4. **Test 10**: repeat with a choker-shaped item vs. a haaram-shaped item — the choker
+   should show a visibly stronger response to the same head turn (wider curvature
+   half-angle) than the haaram, per O above.
+5. Enable "Show performance" and read the new "Deformation" line — record its avg/p95
+   ms, and note whether FPS changed at all from M6.5 (expected: no, or negligible).
+6. Report back: for each test, items 1-9 from Step 13's checklist (attached/floats/
+   contact stable/width changes/follows body/hair correct/clothing correct/stable at
+   distance), plus the Deformation timing line and any FPS change observed.
+
+**CODE VERIFIED, not REAL DEVICE VERIFIED.** Do not read this section as "M6.6
+complete" — per the request's own instruction: **STOP here — do not begin M6.7.**

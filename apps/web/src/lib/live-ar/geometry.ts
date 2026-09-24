@@ -81,14 +81,15 @@ export function resolveEarPoints(
   return edgeA.x <= edgeB.x ? { left: edgeA, right: edgeB } : { left: edgeB, right: edgeA };
 }
 
-/** Ports ai/landmarks/face.py's `_estimate_ears_and_yaw` confidence heuristic: the ear
- * on the side the head is turned AWAY from (more foreshortened relative to the nose)
- * gets a lower confidence, capped below `EAR_HEURISTIC_CONFIDENCE_CEILING` since this is
- * a 2D geometric heuristic, never a calibrated 3D visibility measurement. */
-export function resolveEarConfidence(
-  landmarks: NormalizedPoint[],
-  detectionConfidence: number
-): { left: number; right: number } | null {
+/** Shared by `resolveEarConfidence` below and M6.6's `estimateHeadYawAsymmetry` --
+ * extracted so both consume the SAME landmark asymmetry measurement rather than two
+ * independently-maintained copies of the same nose/edge-landmark math (this project's
+ * established "one source of truth" discipline -- see geometry.ts's file docstring on
+ * the earring-rotation bug this exact class of duplication caused previously).
+ * Positive => the SCREEN-RIGHT face-oval edge landmark is farther from the nose than
+ * the screen-left one (i.e. the head has turned to show more of its screen-left side);
+ * negative is the mirror case. A 2D geometric heuristic, never a calibrated 3D angle. */
+function computeFaceEdgeAsymmetry(landmarks: NormalizedPoint[]): number | null {
   if (landmarks.length <= Math.max(NOSE_TIP_IDX, LEFT_EDGE_IDX, RIGHT_EDGE_IDX)) return null;
   const nose = landmarks[NOSE_TIP_IDX];
   const edgeA = landmarks[LEFT_EDGE_IDX];
@@ -97,7 +98,35 @@ export function resolveEarConfidence(
   const distLeft = Math.hypot(nose.x - leftPoint.x, nose.y - leftPoint.y);
   const distRight = Math.hypot(nose.x - rightPoint.x, nose.y - rightPoint.y);
   const total = distLeft + distRight;
-  const asymmetry = total === 0 ? 0 : (distRight - distLeft) / total;
+  return total === 0 ? 0 : (distRight - distLeft) / total;
+}
+
+/** M6.6 (docs/live-ar-realism-verification.md §19): a real, per-frame-MEASURED proxy
+ * for head yaw, used by jewellery-deformation.ts/neck-projection.ts to make the
+ * necklace's apparent curvature/width respond to viewing angle -- HONEST LIMITATION:
+ * this is a 2D landmark-asymmetry heuristic derived from the SAME face-oval edge
+ * landmarks `resolveEarPoints`/`resolveEarConfidence` already use, not a calibrated 3D
+ * head-pose angle (MediaPipe's `outputFacialTransformationMatrixes`, which WOULD give a
+ * real 3D rotation, is not wired into this pipeline -- see the M6.1 architecture audit's
+ * "available, unused" note; adopting it is a documented future improvement, not done
+ * here, to avoid widening this milestone's scope beyond Canvas-2D geometry). Returns
+ * null when no face is tracked this frame -- callers fall back to 0 (the M6.5-equivalent
+ * straight-on assumption), never a fabricated angle. */
+export function estimateHeadYawAsymmetry(face: LiveFaceLandmarks | null): number | null {
+  if (face === null) return null;
+  return computeFaceEdgeAsymmetry(face.landmarks);
+}
+
+/** Ports ai/landmarks/face.py's `_estimate_ears_and_yaw` confidence heuristic: the ear
+ * on the side the head is turned AWAY from (more foreshortened relative to the nose)
+ * gets a lower confidence, capped below `EAR_HEURISTIC_CONFIDENCE_CEILING` since this is
+ * a 2D geometric heuristic, never a calibrated 3D visibility measurement. */
+export function resolveEarConfidence(
+  landmarks: NormalizedPoint[],
+  detectionConfidence: number
+): { left: number; right: number } | null {
+  const asymmetry = computeFaceEdgeAsymmetry(landmarks);
+  if (asymmetry === null) return null;
 
   const confidenceFor = (isLeft: boolean) => {
     const penalty = Math.max(0, isLeft ? asymmetry : -asymmetry);

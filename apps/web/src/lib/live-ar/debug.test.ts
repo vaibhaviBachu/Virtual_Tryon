@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeNecklaceDebugSnapshot, formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
+import { computeNecklaceDebugSnapshot, formatNecklaceDebugSnapshot, type WearGeometryDebugInput } from "@/lib/live-ar/debug";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, LiveTransform, NormalizedPoint } from "@/lib/live-ar/types";
 
 const IMAGE_W = 1000;
@@ -151,6 +151,55 @@ describe("computeNecklaceDebugSnapshot -- depth fields (M6.2)", () => {
   });
 });
 
+// M6.6 ("Wear Geometry Debug").
+describe("computeNecklaceDebugSnapshot -- wear geometry fields (M6.6)", () => {
+  const transform: LiveTransform = {
+    anchorPx: { x: 500, y: 500 },
+    scaleFactor: 1,
+    rotationDegrees: 0,
+    sourceAnchorPx: { x: 100, y: 10 },
+    mirrored: false,
+  };
+
+  it("reports null wear-geometry fields when wearDebug isn't passed (byte-for-byte the pre-M6.6 default)", () => {
+    const snapshot = computeNecklaceDebugSnapshot(face(), pose(), IMAGE_W, IMAGE_H, assetGeometry(), transform);
+    expect(snapshot!.yawAsymmetry).toBeNull();
+    expect(snapshot!.contactPeakFraction).toBeNull();
+    expect(snapshot!.horizontalForeshorten).toBeNull();
+    expect(snapshot!.contactCurvePx).toEqual([]);
+  });
+
+  it("reports neck boundaries derived from the SAME neck reference frame already used for placement", () => {
+    const snapshot = computeNecklaceDebugSnapshot(face(), pose(), IMAGE_W, IMAGE_H, assetGeometry(), transform);
+    expect(snapshot!.neckRadiusPx).not.toBeNull();
+    expect(snapshot!.leftNeckBoundaryPx!.x).toBeLessThan(snapshot!.neckCenterPx!.x);
+    expect(snapshot!.rightNeckBoundaryPx!.x).toBeGreaterThan(snapshot!.neckCenterPx!.x);
+  });
+
+  it("maps each strip's contact point through the exact same transform math as the rest of this snapshot, when wearDebug is provided", () => {
+    const wearDebug: WearGeometryDebugInput = {
+      strips: [{ sourceX: 90, sourceWidth: 20, sourceHeight: 300, dropPx: 15 }],
+      horizontalForeshorten: 0.9,
+      contactPeakFraction: 0.5,
+      yawAsymmetry: 0.2,
+    };
+    const snapshot = computeNecklaceDebugSnapshot(face(), pose(), IMAGE_W, IMAGE_H, assetGeometry(), transform, undefined, undefined, wearDebug);
+    expect(snapshot!.yawAsymmetry).toBe(0.2);
+    expect(snapshot!.contactPeakFraction).toBe(0.5);
+    expect(snapshot!.horizontalForeshorten).toBe(0.9);
+    expect(snapshot!.contactCurvePx).toHaveLength(1);
+    // strip center (100) - sourceAnchorPx.x (100) = 0 dx; dropPx(15) - sourceAnchorPx.y(10) = 5 dy;
+    // scale=1, no rotation -> final = anchor + (0, 5) = (500, 505).
+    expect(snapshot!.contactCurvePx[0]).toEqual({ x: 500, y: 505 });
+  });
+
+  it("reports an empty contact curve when wearDebug.strips is null (no curvature active for this item)", () => {
+    const wearDebug: WearGeometryDebugInput = { strips: null, horizontalForeshorten: 1, contactPeakFraction: 0.5, yawAsymmetry: 0 };
+    const snapshot = computeNecklaceDebugSnapshot(face(), pose(), IMAGE_W, IMAGE_H, assetGeometry(), transform, undefined, undefined, wearDebug);
+    expect(snapshot!.contactCurvePx).toEqual([]);
+  });
+});
+
 describe("formatNecklaceDebugSnapshot", () => {
   it("produces a readable, non-empty multi-line report with no [object Object] leaks", () => {
     const transform: LiveTransform = {
@@ -167,6 +216,7 @@ describe("formatNecklaceDebugSnapshot", () => {
     expect(text).toContain("FINAL ATTACHMENT");
     expect(text).toContain("TRANSFORMED JEWELLERY ATTACHMENT");
     expect(text).toContain("DEPTH");
+    expect(text).toContain("WEAR GEOMETRY");
     expect(text).not.toContain("[object Object]");
   });
 });

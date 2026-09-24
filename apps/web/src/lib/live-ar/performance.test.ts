@@ -23,6 +23,7 @@ describe("PerformanceTracker", () => {
       faceDetect: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
       poseDetect: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
       alphaMask: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
+      deformation: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
     });
   });
 
@@ -143,6 +144,31 @@ describe("PerformanceTracker", () => {
       const snapshot = tracker.snapshot();
       expect(snapshot.alphaMask.avgMs).toBeCloseTo(1.5, 6);
       expect(snapshot.occlusion.avgMs).toBeCloseTo(2.5, 6);
+    });
+  });
+
+  describe("jewellery deformation timing (M6.6)", () => {
+    it("reports all-zero when no frame ever carried deformationMs (earrings mode, or no asset loaded)", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ geometryMs: 5 }));
+      expect(tracker.snapshot().deformation.sampleCount).toBe(0);
+    });
+
+    it("tracks deformation timing independently of the combined geometryMs figure it's a subset of", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ geometryMs: 5, deformationMs: 0.3 }));
+      const snapshot = tracker.snapshot();
+      expect(snapshot.deformation.avgMs).toBeCloseTo(0.3, 6);
+      expect(snapshot.avgGeometryMs).toBeCloseTo(5, 6);
+    });
+
+    it("excludes cadence-skipped frames (null deformationMs) rather than counting them as 0ms", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ deformationMs: 0.4 }));
+      tracker.record(sample({ deformationMs: null }));
+      const snapshot = tracker.snapshot();
+      expect(snapshot.deformation.sampleCount).toBe(1);
+      expect(snapshot.deformation.avgMs).toBeCloseTo(0.4, 6);
     });
   });
 });

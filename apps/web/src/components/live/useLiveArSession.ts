@@ -7,7 +7,7 @@ import { loadJewelleryAssetTexture } from "@/lib/live-ar/asset-cache";
 import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar/camera";
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
 import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
-import { computeTransformedBoundingBox, planCategoryRenders } from "@/lib/live-ar/geometry";
+import { computeTransformedBoundingBox, estimateHeadYawAsymmetry, planCategoryRenders } from "@/lib/live-ar/geometry";
 import { computeJewelleryStrips, type JewelleryStrip } from "@/lib/live-ar/jewellery-deformation";
 import { resolveNecklaceAttachmentModel, type JewelleryAttachmentModel } from "@/lib/live-ar/jewellery-attachment";
 import {
@@ -66,16 +66,18 @@ function makeSlotState(): SlotState {
   return { trackingMachine: new TrackingStateMachine<LiveTransform>(), smoother: new TransformSmoother() };
 }
 
-/** M6.5: everything resolved once at asset-load time and reused every frame --
- * `attachmentModel`/`strips` are null for earrings (attachment class / neck curvature
- * are necklace-only concepts; see jewellery-attachment.ts) and populated for necklace
- * mode. Computing this ONCE here (not per frame) is what keeps computeJewelleryStrips'
- * per-asset-only cost off the render loop -- see jewellery-deformation.ts's docstring. */
+/** M6.5/M6.6: `attachmentModel` is resolved once at asset-load time and reused every
+ * frame (category slug + the asset's own geometry never change frame to frame -- see
+ * jewellery-attachment.ts's own docstring). `strips`/`horizontalForeshorten` are
+ * deliberately NOT cached here as of M6.6: they now depend on the current frame's
+ * estimated head yaw (geometry.ts's estimateHeadYawAsymmetry), which changes
+ * continuously, so they are recomputed every frame in the render loop instead (see
+ * jewellery-deformation.ts's file docstring on why this is still cheap). Null for
+ * earrings (attachment class / neck curvature are necklace-only concepts). */
 interface LoadedJewelleryTexture {
   image: HTMLImageElement;
   geometry: JewelleryAssetGeometry;
   attachmentModel: JewelleryAttachmentModel | null;
-  strips: JewelleryStrip[] | null;
 }
 
 function resolveLoadedTexture(
@@ -84,10 +86,9 @@ function resolveLoadedTexture(
   categorySlug: string | null
 ): LoadedJewelleryTexture {
   if (category !== "necklace") {
-    return { ...loaded, attachmentModel: null, strips: null };
+    return { ...loaded, attachmentModel: null };
   }
-  const attachmentModel = resolveNecklaceAttachmentModel(categorySlug, loaded.geometry);
-  return { ...loaded, attachmentModel, strips: computeJewelleryStrips(loaded.geometry, attachmentModel.curvature) };
+  return { ...loaded, attachmentModel: resolveNecklaceAttachmentModel(categorySlug, loaded.geometry) };
 }
 
 /** Smooths only the numeric fields of a LiveTransform, preserving `mirrored` and
@@ -173,6 +174,12 @@ export interface UseLiveArSessionArgs {
    * fresh-enough mask exists, regardless of this flag; this flag only controls whether
    * you can SEE the decision being made. */
   showOcclusionDebug?: boolean;
+  /** M6.6 spec Step 12 ("Comparison mode"): dev/debug-only, never exposed to
+   * customers by default. When true, ALSO renders the necklace's M6.5-equivalent
+   * (yaw forced to 0 -- angle-blind) appearance into `wearComparisonCanvasRef`, using
+   * the SAME camera frame and jewellery the main canvas draws this frame, so the two
+   * can be compared side by side without altering tracking/placement itself. */
+  showWearComparison?: boolean;
 }
 
 export interface UseLiveArSessionResult {
@@ -250,6 +257,13 @@ export interface UseLiveArSessionResult {
    * visualization. Same externally-rendered, standalone-panel convention as
    * `finalVisibilityMaskCanvasRef` above. */
   jewelleryAlphaDebugCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** M6.6 spec Step 12: a video-sized canvas the render loop draws the M6.5-equivalent
+   * (yaw-blind, straight-on) necklace rendering into, from the SAME frame/transform the
+   * main canvas used -- render it via `<canvas ref={session.wearComparisonCanvasRef} />`
+   * next to the main view for an A/B comparison. Only updated while `showWearComparison`
+   * is on; stays at its last content otherwise (same convention as the other debug
+   * canvases above -- harmless since it's not visible unless the caller renders it). */
+  wearComparisonCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
    * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
    * canvas isn't ready yet. */
@@ -271,6 +285,7 @@ export function useLiveArSession({
   debugNeckHorizontalOffsetOverride = null,
   showSegmentationDebug = false,
   showOcclusionDebug = false,
+  showWearComparison = false,
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -283,6 +298,8 @@ export function useLiveArSession({
   // pattern as finalVisibilityMaskCanvasRef above (a standalone picture-in-picture
   // panel, not composited onto the camera feed).
   const jewelleryAlphaDebugCanvasRef = useRef<HTMLCanvasElement>(null);
+  // M6.6 spec Step 12 -- same externally-owned pattern as the two canvases above.
+  const wearComparisonCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const trackersRef = useRef<LiveTrackers | null>(null);
   // M6.3 -- see the render loop below for why loading/running is unconditional but
@@ -346,6 +363,8 @@ export function useLiveArSession({
   showSegmentationDebugRef.current = showSegmentationDebug;
   const showOcclusionDebugRef = useRef(showOcclusionDebug);
   showOcclusionDebugRef.current = showOcclusionDebug;
+  const showWearComparisonRef = useRef(showWearComparison);
+  showWearComparisonRef.current = showWearComparison;
   // Read fresh every frame from a ref (not render-loop-effect state) so dragging the
   // calibration slider doesn't tear down and restart tracking/smoothing state each tick.
   const debugNeckFractionOverrideRef = useRef(debugNeckFractionOverride);
@@ -558,8 +577,37 @@ export function useLiveArSession({
       }
 
       const loaded = assetGeometryRef.current;
-      let overlays: { image: HTMLImageElement; transform: LiveTransform; opacity: number; strips: JewelleryStrip[] | null }[] = [];
+      let overlays: {
+        image: HTMLImageElement;
+        transform: LiveTransform;
+        opacity: number;
+        strips: JewelleryStrip[] | null;
+        horizontalForeshorten: number;
+        contactPeakFraction: number;
+      }[] = [];
       let primaryStatus: TrackingStatus = "TRACKING_LOST";
+
+      // M6.6 (docs/live-ar-realism-verification.md §19): estimated ONCE per frame (not
+      // once per neck item -- every simultaneously-worn item shares the same head, so
+      // the same yaw estimate applies to all of them) and recomputed every frame,
+      // unlike M6.5's per-asset-load-cached strips, because head yaw changes
+      // continuously. Falls back to 0 (M6.5's exact straight-on assumption) when no
+      // face is tracked this frame -- never a fabricated angle.
+      const yawAsymmetry = estimateHeadYawAsymmetry(face) ?? 0;
+      // M6.6 spec Step 14: real, measured cost of this frame's strip/foreshorten
+      // recomputation (a SUBSET of geometryMs -- see FrameSample.deformationMs's own
+      // doc comment), accumulated across the primary item and every additional layered
+      // item. Stays null (never 0) on a frame where nothing actually ran the real
+      // computation (earrings mode, or no necklace overlay) -- same convention as
+      // segmentationMs/occlusionMs/alphaMaskMs.
+      let deformationMs: number | null = null;
+      const deformationFor = (texture: LoadedJewelleryTexture) => {
+        if (!texture.attachmentModel) return { strips: null, horizontalForeshorten: 1, contactPeakFraction: 0.5 };
+        const start = performance.now();
+        const plan = computeJewelleryStrips(texture.geometry, texture.attachmentModel.curvature, yawAsymmetry);
+        deformationMs = (deformationMs ?? 0) + (performance.now() - start);
+        return plan;
+      };
 
       if (loaded) {
         // M6.5: an explicit necklaceLength override (rare -- see its own doc comment)
@@ -577,6 +625,7 @@ export function useLiveArSession({
           debugNeckFractionOverrideRef.current ?? undefined,
           debugNeckHorizontalOffsetOverrideRef.current ?? undefined
         );
+        const deformation = deformationFor(loaded);
         overlays = plans.flatMap((plan, index) => {
           let slot = slotsRef.current.get(plan.slot);
           if (!slot) {
@@ -587,7 +636,16 @@ export function useLiveArSession({
           const result = slot.trackingMachine.update(frameStartMs, smoothed);
           if (index === 0) primaryStatus = result.status;
           if (result.transform === null || result.opacity <= 0) return [];
-          return [{ image: loaded.image, transform: result.transform, opacity: result.opacity, strips: loaded.strips }];
+          return [
+            {
+              image: loaded.image,
+              transform: result.transform,
+              opacity: result.opacity,
+              strips: deformation.strips,
+              horizontalForeshorten: deformation.horizontalForeshorten,
+              contactPeakFraction: deformation.contactPeakFraction,
+            },
+          ];
         });
       }
 
@@ -622,7 +680,15 @@ export function useLiveArSession({
           const smoothed = plan?.transform ? smoothTransform(slot.smoother, plan.transform, dtMs) : null;
           const result = slot.trackingMachine.update(frameStartMs, smoothed);
           if (result.transform === null || result.opacity <= 0) return;
-          overlays.push({ image: additionalLoaded.image, transform: result.transform, opacity: result.opacity, strips: additionalLoaded.strips });
+          const deformation = deformationFor(additionalLoaded);
+          overlays.push({
+            image: additionalLoaded.image,
+            transform: result.transform,
+            opacity: result.opacity,
+            strips: deformation.strips,
+            horizontalForeshorten: deformation.horizontalForeshorten,
+            contactPeakFraction: deformation.contactPeakFraction,
+          });
         });
       }
       const t2 = performance.now();
@@ -734,7 +800,7 @@ export function useLiveArSession({
                   y: necklaceOverlay.transform.anchorPx.y - bboxPx[1],
                 },
               };
-              drawJewelleryOverlay(localCtx, necklaceOverlay.image, localTransform, 1, necklaceOverlay.strips);
+              drawJewelleryOverlay(localCtx, necklaceOverlay.image, localTransform, 1, necklaceOverlay.strips, necklaceOverlay.horizontalForeshorten);
 
               // Downscale (general case, including a bbox partially clipped by the
               // mask/frame edge): computeAlphaDownscaleSourceRect (occlusion.ts, pure,
@@ -839,7 +905,8 @@ export function useLiveArSession({
               latestMask.maskHeightPx,
               videoWidthPx,
               videoHeightPx,
-              necklaceOverlay.strips
+              necklaceOverlay.strips,
+              necklaceOverlay.horizontalForeshorten
             );
             occludedNecklaceCanvas = scratchCanvas;
 
@@ -932,16 +999,53 @@ export function useLiveArSession({
         if (index === 0 && occludedNecklaceCanvas) {
           ctx.drawImage(occludedNecklaceCanvas, 0, 0);
         } else {
-          drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity, overlay.strips);
+          drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity, overlay.strips, overlay.horizontalForeshorten);
         }
       });
       const t3 = performance.now();
+
+      // M6.6 spec Step 12 ("Comparison mode"): draws the M6.5-equivalent (yaw forced
+      // to 0) necklace rendering into a SEPARATE canvas, from the SAME video frame and
+      // the SAME already-tracked transform/image as the main canvas just used above --
+      // never a second tracking pass, never altered placement. Dev/debug-only, gated
+      // behind showWearComparisonRef exactly like the other debug canvases.
+      if (showWearComparisonRef.current && category === "necklace" && loaded?.attachmentModel) {
+        const necklaceOverlay = overlays[0] ?? null;
+        const comparisonCanvas = wearComparisonCanvasRef.current;
+        if (necklaceOverlay && comparisonCanvas) {
+          ensureCanvasSize(comparisonCanvas, videoWidthPx, videoHeightPx);
+          const comparisonCtx = comparisonCanvas.getContext("2d");
+          if (comparisonCtx) {
+            const legacyDeformation = computeJewelleryStrips(loaded.geometry, loaded.attachmentModel.curvature, 0);
+            renderLiveFrame(comparisonCtx, { video, videoWidthPx, videoHeightPx }, {
+              image: necklaceOverlay.image,
+              transform: necklaceOverlay.transform,
+              opacity: necklaceOverlay.opacity,
+              strips: legacyDeformation.strips,
+              horizontalForeshorten: legacyDeformation.horizontalForeshorten,
+            });
+          }
+        }
+      }
 
       // Debug overlay: uses the SAME actually-rendered (post-smoothing) transform just
       // drawn above, on the SAME live frame -- never a re-derivation, so this can't
       // silently drift from what the person is actually seeing on screen.
       if (debugEnabledRef.current && category === "necklace" && loaded) {
         const necklaceOverlay = overlays[0] ?? null;
+        // M6.6: the wear-geometry markers (neck boundaries/contact curve) are folded
+        // into this SAME existing debug overlay rather than a second toggle -- see
+        // debug.ts's WearGeometryDebugInput doc comment. Null when there's no necklace
+        // overlay this frame (tracking lost), same condition every other field here
+        // already handles.
+        const wearDebug = necklaceOverlay
+          ? {
+              strips: necklaceOverlay.strips,
+              horizontalForeshorten: necklaceOverlay.horizontalForeshorten,
+              contactPeakFraction: necklaceOverlay.contactPeakFraction,
+              yawAsymmetry,
+            }
+          : null;
         const snapshot = computeNecklaceDebugSnapshot(
           face,
           pose,
@@ -950,7 +1054,8 @@ export function useLiveArSession({
           loaded.geometry,
           necklaceOverlay?.transform ?? null,
           debugNeckFractionOverrideRef.current ?? undefined,
-          debugNeckHorizontalOffsetOverrideRef.current ?? undefined
+          debugNeckHorizontalOffsetOverrideRef.current ?? undefined,
+          wearDebug
         );
         if (snapshot) {
           drawNecklaceDebugOverlay(ctx, snapshot);
@@ -1013,6 +1118,7 @@ export function useLiveArSession({
         alphaMaskMs,
         faceDetectMs,
         poseDetectMs,
+        deformationMs,
       });
 
       setTrackingStatus(primaryStatus);
@@ -1059,6 +1165,7 @@ export function useLiveArSession({
     occlusionDebugInfo,
     finalVisibilityMaskCanvasRef,
     jewelleryAlphaDebugCanvasRef,
+    wearComparisonCanvasRef,
     captureFrame,
   };
 }

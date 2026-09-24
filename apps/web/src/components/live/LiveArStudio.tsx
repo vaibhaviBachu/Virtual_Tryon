@@ -21,6 +21,7 @@ import {
   saveNeckHorizontalOffsetOverride,
 } from "@/lib/live-ar/neck-horizontal-offset-override";
 import {
+  formatDeformationDebugText,
   formatOcclusionDebugText,
   formatPerformanceOverlayText,
   formatSegmentationDebugText,
@@ -85,6 +86,13 @@ export function LiveArStudio() {
   // itself is always active for necklace whenever a fresh-enough mask exists,
   // regardless of this flag; this only controls whether you can SEE the decision.
   const [showOcclusionDebug, setShowOcclusionDebug] = useState(false);
+  // M6.6 spec Step 12 ("Comparison mode"): dev-only toggle for the side-by-side
+  // M6.5-equivalent (yaw-blind) vs. actual M6.6 rendering thumbnail. Independent of
+  // showDebugOverlay above -- the wear-geometry MARKERS (neck boundaries/contact curve)
+  // are folded into that existing necklace-debug overlay instead of a second toggle
+  // (see debug.ts's WearGeometryDebugInput doc comment); this toggle is only for the
+  // rendered-pixel A/B comparison.
+  const [showWearComparison, setShowWearComparison] = useState(false);
   // Persisted, per-browser calibration override (see neck-fraction-override.ts) -- the
   // automatic default from constants.ts is used unless/until someone saves a value from
   // the slider below, at which point it applies on every necklace session in THIS
@@ -249,6 +257,7 @@ export function LiveArStudio() {
       category === "necklace" ? (showDebugOverlay ? neckHorizontalOffsetPreview : savedNeckHorizontalOffset) : null,
     showSegmentationDebug,
     showOcclusionDebug,
+    showWearComparison,
   });
 
   async function handleCapture() {
@@ -316,6 +325,9 @@ export function LiveArStudio() {
                 {/* 2026-09-24 real-device review Step 12: split "Tracking" into its
                     real FaceLandmarker/PoseLandmarker components. */}
                 <div>{formatTrackingBreakdownText(session.performance)}</div>
+                {/* M6.6 spec Step 14: real, measured cost of the yaw-responsive strip
+                    recomputation -- a subset of "Geometry" above, not additional to it. */}
+                <div>{formatDeformationDebugText(session.performance)}</div>
               </div>
             )}
 
@@ -392,6 +404,17 @@ export function LiveArStudio() {
                 />
               </div>
             )}
+
+            {/* M6.6 spec Step 12 -- side-by-side comparison: this panel shows the
+                M6.5-equivalent (yaw-blind, angle-independent) rendering, from the SAME
+                camera frame and jewellery the main canvas (M6.6, yaw-responsive) just
+                drew above -- dev/debug-only, never part of the customer experience. */}
+            {showWearComparison && (
+              <div className="absolute bottom-3 left-3 flex flex-col items-start gap-1">
+                <span className="rounded bg-black/70 px-1.5 py-0.5 text-[9px] text-white">M6.5-equivalent (yaw-blind) comparison</span>
+                <canvas ref={session.wearComparisonCanvasRef} className="h-28 w-36 rounded border border-white/40 bg-black/40 object-cover" />
+              </div>
+            )}
           </div>
 
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
@@ -442,6 +465,16 @@ export function LiveArStudio() {
                   onClick={() => setShowOcclusionDebug((v) => !v)}
                 >
                   {showOcclusionDebug ? "Hide" : "Show"} occlusion debug
+                </button>
+              )}
+              {/* M6.6 spec Step 12 -- dev-only, never part of the customer experience. */}
+              {category === "necklace" && (
+                <button
+                  type="button"
+                  className="text-xs text-neutral-400 underline-offset-2 hover:underline"
+                  onClick={() => setShowWearComparison((v) => !v)}
+                >
+                  {showWearComparison ? "Hide" : "Show"} wear comparison (M6.5 vs M6.6)
                 </button>
               )}
               <Button onClick={handleCapture} disabled={isLoadingPipeline || captureState === "capturing"}>

@@ -24,6 +24,7 @@
  */
 import {
   CHOKER_ASPECT_RATIO_THRESHOLD,
+  NECKLACE_CURVATURE_HALF_ANGLE_RADIANS,
   NECKLACE_CURVATURE_MAX_DROP_FRACTION,
   NECKLACE_CURVATURE_STRIP_COUNT,
 } from "@/lib/live-ar/constants";
@@ -33,9 +34,14 @@ export type NecklaceAttachmentClass = "choker" | "necklace" | "haaram";
 
 export interface NeckCurvatureParams {
   /** Fraction of the asset's own measured (alpha-bbox) width -- see
-   * jewellery-deformation.ts's computeJewelleryStrips for how this is applied. */
+   * neck-projection.ts's computeContactProjection for how this is applied. */
   maxDropFraction: number;
   stripCount: number;
+  /** M6.6: half the angle of neck circumference this class's contact curve is modeled
+   * as wrapping, in radians -- see constants.ts's NECKLACE_CURVATURE_HALF_ANGLE_RADIANS
+   * and neck-projection.ts's file docstring for the elliptical-projection model this
+   * feeds. */
+  curvatureHalfAngleRadians: number;
 }
 
 export interface JewelleryAttachmentModel {
@@ -97,6 +103,7 @@ export function resolveNecklaceAttachmentModel(
     curvature: {
       maxDropFraction: NECKLACE_CURVATURE_MAX_DROP_FRACTION[attachmentClass],
       stripCount: NECKLACE_CURVATURE_STRIP_COUNT,
+      curvatureHalfAngleRadians: NECKLACE_CURVATURE_HALF_ANGLE_RADIANS[attachmentClass],
     },
     necklaceLengthKey: NECKLACE_LENGTH_KEY_BY_ATTACHMENT_CLASS[attachmentClass],
   };

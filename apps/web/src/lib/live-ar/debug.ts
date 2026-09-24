@@ -23,7 +23,22 @@
 import { applyLiveTransformToPoint, computeTransformedBoundingBox, resolveEarPoints } from "@/lib/live-ar/geometry";
 import { safeLandmarkZ } from "@/lib/live-ar/depth";
 import { computeNeckReferenceFrame } from "@/lib/live-ar/neck-reference";
+import { computeNeckSurfaceDebugPoints } from "@/lib/live-ar/neck-surface";
+import type { JewelleryStrip } from "@/lib/live-ar/jewellery-deformation";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, LiveTransform, PixelPoint } from "@/lib/live-ar/types";
+
+/** M6.6 ("Wear Geometry Debug" -- spec Step 2/11): the SAME strip plan/foreshorten
+ * already computed for actual rendering this frame (useLiveArSession.ts's
+ * `deformationFor`), passed in rather than recomputed here, so this debug
+ * visualization can never show a different curve than what was actually drawn. Null
+ * (the default) draws none of the new M6.6 markers -- byte-for-byte the pre-M6.6
+ * NecklaceDebugSnapshot. */
+export interface WearGeometryDebugInput {
+  strips: JewelleryStrip[] | null;
+  horizontalForeshorten: number;
+  contactPeakFraction: number;
+  yawAsymmetry: number;
+}
 
 const LEFT_SHOULDER_IDX = 11;
 const RIGHT_SHOULDER_IDX = 12;
@@ -86,6 +101,25 @@ export interface NecklaceDebugSnapshot {
    * Negative means the left shoulder is closer to the camera. Null unless both
    * shoulders' z are available. */
   shoulderDepthDeltaZ: number | null;
+
+  // M6.6 ("Wear Geometry Debug") -- null exactly when `wearDebug` wasn't passed to
+  // computeNecklaceDebugSnapshot (earrings, or the toggle is off) or the neck reference
+  // frame has no width estimate (see neck-surface.ts's own null case).
+  leftNeckBoundaryPx: PixelPoint | null;
+  rightNeckBoundaryPx: PixelPoint | null;
+  neckRadiusPx: number | null;
+  /** Canvas-space points tracing the jewellery's ACTUAL contact curve this frame (one
+   * per strip, center-of-strip x, its real dropPx y) -- mapped through the SAME
+   * `applyLiveTransformToPoint` used everywhere else in this file, so this can never
+   * show a curve different from the transform that was actually used. Does NOT
+   * additionally apply `horizontalForeshorten` (a renderer-only whole-sprite X scale
+   * outside `LiveTransform`) -- a documented simplification, most visible at extreme
+   * yaw; the horizontal POSITIONS here are the pre-foreshorten ones, while the actual
+   * render also compresses them slightly further toward center. */
+  contactCurvePx: PixelPoint[];
+  yawAsymmetry: number | null;
+  contactPeakFraction: number | null;
+  horizontalForeshorten: number | null;
 }
 
 function fmtPt(p: PixelPoint | null): string {
@@ -127,6 +161,11 @@ export function formatNecklaceDebugSnapshot(s: NecklaceDebugSnapshot): string {
     `  face nose z=${fmtNum(s.faceNoseZ)}  (FaceLandmarker origin: center of head)`,
     `  shoulders: left z=${fmtNum(s.leftShoulderZ)}  right z=${fmtNum(s.rightShoulderZ)}  delta(left-right)=${fmtNum(s.shoulderDepthDeltaZ)}  (PoseLandmarker origin: hip midpoint)`,
     `  NOTE: face z and shoulder z use DIFFERENT origins -- not directly comparable to each other.`,
+    ``,
+    `WEAR GEOMETRY (M6.6 -- elliptical neck projection, see neck-projection.ts):`,
+    `  neck boundaries: left=${fmtPt(s.leftNeckBoundaryPx)}  right=${fmtPt(s.rightNeckBoundaryPx)}  radius=${fmtNum(s.neckRadiusPx)}`,
+    `  yaw asymmetry=${fmtNum(s.yawAsymmetry)}  contact peak fraction=${fmtNum(s.contactPeakFraction)}  horizontal foreshorten=${fmtNum(s.horizontalForeshorten)}`,
+    `  contact curve points: ${s.contactCurvePx.length}`,
   ].join("\n");
 }
 
@@ -141,7 +180,8 @@ export function computeNecklaceDebugSnapshot(
   // previewing, so this readout's NECK line matches what's actually being rendered
   // instead of always recomputing against the shipped constant.
   neckFractionOverride?: number,
-  neckHorizontalOffsetOverride?: number
+  neckHorizontalOffsetOverride?: number,
+  wearDebug: WearGeometryDebugInput | null = null
 ): NecklaceDebugSnapshot | null {
   if (transform === null) return null;
 
@@ -184,6 +224,10 @@ export function computeNecklaceDebugSnapshot(
   const transformedAssetAttachmentPx = applyLiveTransformToPoint(transform, assetGeometry.anchorPx);
   const finalVisibleBboxPx = computeTransformedBoundingBox(transform, assetGeometry);
 
+  const surface = neck ? computeNeckSurfaceDebugPoints(neck) : null;
+  const contactCurvePx =
+    wearDebug?.strips?.map((strip) => applyLiveTransformToPoint(transform, { x: strip.sourceX + strip.sourceWidth / 2, y: strip.dropPx })) ?? [];
+
   return {
     imageWidthPx,
     imageHeightPx,
@@ -214,5 +258,12 @@ export function computeNecklaceDebugSnapshot(
     leftShoulderZ,
     rightShoulderZ,
     shoulderDepthDeltaZ,
+    leftNeckBoundaryPx: surface?.leftBoundaryPx ?? null,
+    rightNeckBoundaryPx: surface?.rightBoundaryPx ?? null,
+    neckRadiusPx: surface?.radiusPx ?? null,
+    contactCurvePx,
+    yawAsymmetry: wearDebug?.yawAsymmetry ?? null,
+    contactPeakFraction: wearDebug?.contactPeakFraction ?? null,
+    horizontalForeshorten: wearDebug?.horizontalForeshorten ?? null,
   };
 }
