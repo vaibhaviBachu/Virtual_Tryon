@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildFinalVisibilityMaskRgba,
   buildOcclusionDebugRgba,
   buildOcclusionEraseRgba,
+  computeCategoryDistribution,
   computeNecklaceOcclusionMask,
+  formatCategoryDistribution,
   isMaskStale,
   toMaskSpaceRegion,
   type OcclusionRegion,
@@ -202,6 +205,65 @@ describe("buildOcclusionEraseRgba (the real, non-debug erase pattern)", () => {
 
   it("produces exactly occlusionMask.length * 4 bytes", () => {
     expect(buildOcclusionEraseRgba(new Uint8ClampedArray(9)).length).toBe(36);
+  });
+});
+
+describe("buildFinalVisibilityMaskRgba (M6.4 real-device review Step 2)", () => {
+  it("is white and fully opaque wherever the jewellery is visible (occlusion=0)", () => {
+    const rgba = buildFinalVisibilityMaskRgba(new Uint8ClampedArray([0]));
+    expect(Array.from(rgba)).toEqual([255, 255, 255, 255]);
+  });
+
+  it("is black and fully opaque wherever the jewellery is occluded (occlusion=255)", () => {
+    const rgba = buildFinalVisibilityMaskRgba(new Uint8ClampedArray([255]));
+    expect(Array.from(rgba)).toEqual([0, 0, 0, 255]);
+  });
+
+  it("is always fully opaque itself, even for a partially-occluded value -- this panel never fades, unlike the erase pattern", () => {
+    const rgba = buildFinalVisibilityMaskRgba(new Uint8ClampedArray([128]));
+    expect(rgba[3]).toBe(255);
+    expect(rgba[0]).toBe(127); // 255-128, gray
+  });
+});
+
+describe("computeCategoryDistribution / formatCategoryDistribution (M6.4 real-device review Step 7/8)", () => {
+  const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: 4, bottomPx: 4, attachmentYPx: 2 };
+
+  it("reports 0 for every category and an empty message when the mask has no data in-region", () => {
+    const degenerate: OcclusionRegion = { leftPx: 10, topPx: 10, rightPx: 10, bottomPx: 10, attachmentYPx: 0 };
+    const d = computeCategoryDistribution(uniformCategoryMask(HAIR, 4, 4), 4, 4, degenerate);
+    expect(d.totalPixels).toBe(0);
+    expect(formatCategoryDistribution(d)).toContain("0 mask pixels");
+  });
+
+  it("reports 100% hair when the entire region is hair", () => {
+    const d = computeCategoryDistribution(uniformCategoryMask(HAIR, 4, 4), 4, 4, region);
+    expect(d.totalPixels).toBe(16);
+    expect(d.hairPct).toBe(100);
+    expect(d.clothesPct).toBe(0);
+    expect(d.backgroundPct).toBe(0);
+  });
+
+  it("computes real percentages for a mixed region -- this is what would reveal 'no hair actually detected over the necklace' on a real device", () => {
+    // 4x4: 4 hair, 4 clothes, 4 background, 4 face-skin.
+    const mask = new Uint8Array([
+      HAIR, HAIR, CLOTHES, CLOTHES,
+      HAIR, HAIR, CLOTHES, CLOTHES,
+      BACKGROUND, BACKGROUND, FACE_SKIN, FACE_SKIN,
+      BACKGROUND, BACKGROUND, FACE_SKIN, FACE_SKIN,
+    ]);
+    const d = computeCategoryDistribution(mask, 4, 4, region);
+    expect(d.hairPct).toBeCloseTo(25, 6);
+    expect(d.clothesPct).toBeCloseTo(25, 6);
+    expect(d.backgroundPct).toBeCloseTo(25, 6);
+    expect(d.faceSkinPct).toBeCloseTo(25, 6);
+  });
+
+  it("formats a readable, non-empty report with real numbers", () => {
+    const d = computeCategoryDistribution(uniformCategoryMask(HAIR, 4, 4), 4, 4, region);
+    const text = formatCategoryDistribution(d);
+    expect(text).toContain("hair=100.0%");
+    expect(text).toContain("16px");
   });
 });
 

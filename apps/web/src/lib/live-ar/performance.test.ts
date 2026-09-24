@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PerformanceTracker, computeTimingStats, formatPerformanceOverlayText } from "@/lib/live-ar/performance";
+import { PerformanceTracker, computeTimingStats, formatPerformanceOverlayText, formatTrackingBreakdownText } from "@/lib/live-ar/performance";
 
 function sample(overrides: Partial<Parameters<PerformanceTracker["record"]>[0]> = {}) {
   return { totalFrameMs: 33.3, trackingMs: 8, geometryMs: 0.4, renderMs: 2, droppedFrame: false, ...overrides };
@@ -20,6 +20,8 @@ describe("PerformanceTracker", () => {
       sampleCount: 0,
       segmentation: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
       occlusion: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
+      faceDetect: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
+      poseDetect: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
     });
   });
 
@@ -102,6 +104,43 @@ describe("PerformanceTracker", () => {
       expect(snapshot.occlusion.sampleCount).toBe(2);
       expect(snapshot.occlusion.avgMs).toBeCloseTo(2.5, 6);
     });
+  });
+
+  // M6.4 real-device review (2026-09-24) Step 12: split the combined trackingMs into
+  // its two real components.
+  describe("face/pose detection timing breakdown (M6.4 real-device review)", () => {
+    it("reports all-zero when no frame ever carried faceDetectMs/poseDetectMs", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample());
+      const snapshot = tracker.snapshot();
+      expect(snapshot.faceDetect.sampleCount).toBe(0);
+      expect(snapshot.poseDetect.sampleCount).toBe(0);
+    });
+
+    it("tracks face and pose detection timing independently", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ faceDetectMs: 60, poseDetectMs: 40 }));
+      tracker.record(sample({ faceDetectMs: 80, poseDetectMs: 30 }));
+      const snapshot = tracker.snapshot();
+      expect(snapshot.faceDetect.avgMs).toBeCloseTo(70, 6);
+      expect(snapshot.poseDetect.avgMs).toBeCloseTo(35, 6);
+    });
+  });
+});
+
+describe("formatTrackingBreakdownText", () => {
+  it("reports 'no samples yet' before any face/pose timing has been recorded", () => {
+    const tracker = new PerformanceTracker();
+    tracker.record(sample());
+    expect(formatTrackingBreakdownText(tracker.snapshot())).toBe("Tracking breakdown: no samples yet");
+  });
+
+  it("formats real face/pose timing stats once recorded", () => {
+    const tracker = new PerformanceTracker();
+    tracker.record(sample({ faceDetectMs: 60.4, poseDetectMs: 40.1 }));
+    const text = formatTrackingBreakdownText(tracker.snapshot());
+    expect(text).toContain("Face: n=1 avg=60.4ms");
+    expect(text).toContain("Pose: n=1 avg=40.1ms");
   });
 });
 

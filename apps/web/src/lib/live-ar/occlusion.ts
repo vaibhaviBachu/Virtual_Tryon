@@ -133,6 +133,101 @@ export function buildOcclusionEraseRgba(occlusionMask: Uint8ClampedArray): Uint8
   return rgba;
 }
 
+/** M6.4 real-device review (2026-09-24), Step 2: "Render the exact alpha mask that is
+ * actually being applied to the jewellery... WHITE = jewellery visible, BLACK =
+ * jewellery hidden, GRAY = partial alpha." This is literally the complement of
+ * `buildOcclusionEraseRgba` above (that one drives the erase; this one is FOR HUMAN
+ * EYES, always fully opaque itself so it reads clearly as its own picture-in-picture
+ * panel rather than a semi-transparent overlay on the camera). Kept as a separate
+ * function from `buildOcclusionDebugRgba` below (which colors WHICH CATEGORY is
+ * occluding, in-place on the camera feed) -- this answers a different question ("what
+ * is the final per-pixel visibility") from a different, better-suited view (a
+ * standalone thumbnail, not an overlay). */
+export function buildFinalVisibilityMaskRgba(occlusionMask: Uint8ClampedArray): Uint8ClampedArray {
+  const rgba = new Uint8ClampedArray(occlusionMask.length * 4);
+  for (let i = 0; i < occlusionMask.length; i++) {
+    const visible = 255 - occlusionMask[i]; // 255 = fully visible (white), 0 = fully occluded (black)
+    const offset = i * 4;
+    rgba[offset] = visible;
+    rgba[offset + 1] = visible;
+    rgba[offset + 2] = visible;
+    rgba[offset + 3] = 255; // always fully opaque -- this is its own standalone panel, never composited
+  }
+  return rgba;
+}
+
+/** M6.4 real-device review, Step 7/8: "print percentage of necklace-region pixels
+ * classified as [each category]... this tells us whether the necklace is actually
+ * intersecting a segmented hair region." Answers exactly that, without guessing from a
+ * screenshot -- if `hairPct` is 0 on a real device even while hair visibly crosses the
+ * necklace on camera, the bug is upstream (segmentation/region mapping); if `hairPct`
+ * is meaningfully positive but the necklace still isn't visibly occluded, the bug is
+ * downstream (compositing/display). */
+export interface CategoryDistribution {
+  totalPixels: number;
+  backgroundPct: number;
+  hairPct: number;
+  bodySkinPct: number;
+  faceSkinPct: number;
+  clothesPct: number;
+  othersPct: number;
+}
+
+const EMPTY_DISTRIBUTION: CategoryDistribution = {
+  totalPixels: 0,
+  backgroundPct: 0,
+  hairPct: 0,
+  bodySkinPct: 0,
+  faceSkinPct: 0,
+  clothesPct: 0,
+  othersPct: 0,
+};
+
+export function computeCategoryDistribution(
+  categoryData: Uint8Array,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  region: OcclusionRegion
+): CategoryDistribution {
+  const left = Math.max(0, Math.floor(region.leftPx));
+  const top = Math.max(0, Math.floor(region.topPx));
+  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
+  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  if (right <= left || bottom <= top) return EMPTY_DISTRIBUTION;
+
+  const counts = [0, 0, 0, 0, 0, 0];
+  let total = 0;
+  for (let y = top; y < bottom; y++) {
+    const rowOffset = y * maskWidthPx;
+    for (let x = left; x < right; x++) {
+      const category = categoryData[rowOffset + x];
+      if (category >= 0 && category <= 5) counts[category]++;
+      total++;
+    }
+  }
+  if (total === 0) return EMPTY_DISTRIBUTION;
+  const pct = (n: number) => (n / total) * 100;
+  return {
+    totalPixels: total,
+    backgroundPct: pct(counts[0]),
+    hairPct: pct(counts[1]),
+    bodySkinPct: pct(counts[2]),
+    faceSkinPct: pct(counts[3]),
+    clothesPct: pct(counts[4]),
+    othersPct: pct(counts[5]),
+  };
+}
+
+/** Plain-text rendering of a CategoryDistribution for the debug panel. */
+export function formatCategoryDistribution(d: CategoryDistribution): string {
+  if (d.totalPixels === 0) return "Necklace region: 0 mask pixels (region empty/off-mask)";
+  return (
+    `Necklace region (${d.totalPixels}px): hair=${d.hairPct.toFixed(1)}% ` +
+    `skin=${(d.bodySkinPct + d.faceSkinPct).toFixed(1)}% clothes=${d.clothesPct.toFixed(1)}% ` +
+    `background=${d.backgroundPct.toFixed(1)}% others=${d.othersPct.toFixed(1)}%`
+  );
+}
+
 /** Debug-only visualization (Step 15/16): colors the FINAL occlusion decision itself
  * (not the raw segmentation categories -- segmentation.ts's `buildSegmentationDebugRgba`
  * already covers that) so a real device tester can see exactly which pixels of a given

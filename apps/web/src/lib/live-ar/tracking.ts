@@ -165,21 +165,34 @@ export function toLivePoseLandmarks(result: PoseLandmarkerResult): LivePoseLandm
 /** Runs both detectors for one video frame. `timestampMs` must be monotonically
  * increasing per MediaPipe's VIDEO-mode contract (use the same clock for both calls --
  * a video element's `currentTime * 1000`, or `performance.now()`, are both fine as
- * long as one choice is used consistently for the whole session). */
-export function detectFrame(
+ * long as one choice is used consistently for the whole session).
+ *
+ * Also times each model separately (M6.4 real-device review, 2026-09-24, Step 12:
+ * "Instrument separately: FaceLandmarker inference, PoseLandmarker inference... The
+ * existing 'Tracking' timing appears to be the largest contributor. Determine exactly
+ * what is inside Tracking = X ms.") -- folded into this one function rather than kept
+ * as a second, nearly-identical implementation; callers that only need face/pose (not
+ * the timing) can simply ignore the two extra fields. */
+export function detectFrameWithTiming(
   trackers: LiveTrackers,
   video: HTMLVideoElement,
   timestampMs: number
-): { face: LiveFaceLandmarks | null; pose: LivePoseLandmarks | null } {
+): { face: LiveFaceLandmarks | null; pose: LivePoseLandmarks | null; faceDetectMs: number; poseDetectMs: number } {
+  const faceStart = performance.now();
   const faceResult = trackers.faceLandmarker.detectForVideo(video, timestampMs);
+  const faceDetectMs = performance.now() - faceStart;
+  const poseStart = performance.now();
   const poseResult = trackers.poseLandmarker.detectForVideo(video, timestampMs);
+  const poseDetectMs = performance.now() - poseStart;
   return {
     face: toLiveFaceLandmarks(faceResult),
     pose: toLivePoseLandmarks(poseResult),
+    faceDetectMs,
+    poseDetectMs,
   };
 }
 
-/** One-shot counterpart to detectFrame, for IMAGE-mode trackers (createImageTrackers)
+/** One-shot counterpart to detectFrameWithTiming, for IMAGE-mode trackers (createImageTrackers)
  * against a single static photo -- BotPreview.tsx calls this exactly once per loaded
  * model image, not per frame. */
 export function detectStaticImage(

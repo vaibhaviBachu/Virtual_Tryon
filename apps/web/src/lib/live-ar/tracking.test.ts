@@ -7,7 +7,7 @@ import type { FaceLandmarkerResult, PoseLandmarkerResult } from "@mediapipe/task
  * These test only the pure result->our-types conversion functions, which need no real
  * model or camera -- they take a hand-built MediaPipe result object (the shape
  * `detectForVideo` returns) and check the conversion. The actual `createLiveTrackers` /
- * `detectFrame` calls that load real models and decode real video frames can only be
+ * `detectFrameWithTiming` calls that load real models and decode real video frames can only be
  * exercised in a real browser (see this module's docstring and
  * docs/live-ar-verification.md) -- fabricating a fake WASM/model load here would not be
  * an honest test of anything.

@@ -23,6 +23,12 @@ export interface FrameSample {
    * 0ms sample -- mixing those in would understate the real per-inference cost.
    * Optional so every pre-M6.3 caller/fixture keeps compiling and behaving unchanged. */
   segmentationMs?: number | null;
+  /** M6.4 real-device review (2026-09-24) Step 12: the combined `trackingMs` above is
+   * FaceLandmarker + PoseLandmarker together -- these split it so a real device can
+   * show which one actually dominates instead of guessing. Optional/nullable for the
+   * same reason segmentationMs/occlusionMs are -- old callers keep compiling. */
+  faceDetectMs?: number | null;
+  poseDetectMs?: number | null;
   /** M6.4 (docs/live-ar-realism-architecture.md §17): this frame's occlusion
    * compositing time (computing the occlusion mask + the destination-out erase draw),
    * or `null`/`undefined` on a frame where no occlusion was attempted (no necklace
@@ -61,6 +67,10 @@ export interface PerformanceSnapshot {
   /** M6.4: real occlusion compositing timing, computed ONLY from frames where
    * occlusion was actually attempted (see FrameSample.occlusionMs above). */
   occlusion: TimingStats;
+  /** M6.4 real-device review Step 12: FaceLandmarker/PoseLandmarker split out of the
+   * combined `avgTrackingMs`/frame-total figure above. */
+  faceDetect: TimingStats;
+  poseDetect: TimingStats;
 }
 
 const EMPTY_SNAPSHOT: PerformanceSnapshot = {
@@ -74,6 +84,8 @@ const EMPTY_SNAPSHOT: PerformanceSnapshot = {
   sampleCount: 0,
   segmentation: EMPTY_TIMING_STATS,
   occlusion: EMPTY_TIMING_STATS,
+  faceDetect: EMPTY_TIMING_STATS,
+  poseDetect: EMPTY_TIMING_STATS,
 };
 
 function average(values: number[]): number {
@@ -139,6 +151,12 @@ export class PerformanceTracker {
     const occlusionTimes = this.samples
       .map((s) => s.occlusionMs)
       .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+    const faceDetectTimes = this.samples
+      .map((s) => s.faceDetectMs)
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+    const poseDetectTimes = this.samples
+      .map((s) => s.poseDetectMs)
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
     return {
       fps: avgFrameMs > 0 ? 1000 / avgFrameMs : 0,
       avgFrameMs,
@@ -150,6 +168,8 @@ export class PerformanceTracker {
       sampleCount: this.samples.length,
       segmentation: computeTimingStats(segmentationTimes),
       occlusion: computeTimingStats(occlusionTimes),
+      faceDetect: computeTimingStats(faceDetectTimes),
+      poseDetect: computeTimingStats(poseDetectTimes),
     };
   }
 
@@ -207,5 +227,21 @@ export function formatPerformanceOverlayText(snapshot: PerformanceSnapshot): str
     `Geometry: ${snapshot.avgGeometryMs.toFixed(1)}ms / ` +
     `Render: ${snapshot.avgRenderMs.toFixed(1)}ms / ` +
     `Total: ${totalMs.toFixed(1)}ms`
+  );
+}
+
+/** M6.4 real-device review (2026-09-24) Step 12: breaks the combined `avgTrackingMs`
+ * above into its two real components. Kept as a SEPARATE function (not merged into
+ * `formatPerformanceOverlayText`) so that function's existing spec-quoted output
+ * format stays exactly as documented, rather than growing a second, different-shaped
+ * line under the same name. */
+export function formatTrackingBreakdownText(snapshot: PerformanceSnapshot): string {
+  if (snapshot.faceDetect.sampleCount === 0 && snapshot.poseDetect.sampleCount === 0) {
+    return "Tracking breakdown: no samples yet";
+  }
+  return (
+    `Tracking breakdown -- ` +
+    `Face: n=${snapshot.faceDetect.sampleCount} avg=${snapshot.faceDetect.avgMs.toFixed(1)}ms p95=${snapshot.faceDetect.p95Ms.toFixed(1)}ms / ` +
+    `Pose: n=${snapshot.poseDetect.sampleCount} avg=${snapshot.poseDetect.avgMs.toFixed(1)}ms p95=${snapshot.poseDetect.p95Ms.toFixed(1)}ms`
   );
 }

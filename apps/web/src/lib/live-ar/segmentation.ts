@@ -105,7 +105,7 @@ export function toSegmentationResult(result: ImageSegmenterResult): Segmentation
  * NEVER throws -- on any failure (model not ready, invalid frame, internal MediaPipe
  * error): Step 17 requires that a segmentation failure never crashes the live jewellery
  * session, so this is the one place that boundary is enforced. Not unit-tested directly
- * (same as tracking.ts's `detectFrame`) since it requires a real loaded segmenter --
+ * (same as tracking.ts's `detectFrameWithTiming`) since it requires a real loaded segmenter --
  * the meaningful logic it delegates to (`toSegmentationResult`) is tested on its own. */
 export function runSegmentation(live: LiveSegmenter, video: HTMLVideoElement, timestampMs: number): SegmentationResult | null {
   try {

@@ -612,3 +612,218 @@ is actually performed and reported.
 ## Commit
 
 See `git log` — "feat(live-ar): add segmentation-aware 2D necklace occlusion (M6.4)".
+
+---
+
+# M6.4 Real-Device Review — Debugging Findings (2026-09-24)
+
+**Status: M6.4 NOT FIXED (unconfirmed).** Per the real-device review that prompted this
+section: "Only state M6.4 FIXED if the real camera visibly demonstrates hair in front of
+the necklace." That has not happened — this sandbox has no camera and cannot perform
+that check. What follows is everything that COULD be determined without one, plus new
+diagnostic tooling for the next real-device pass. Do not read anything below as a claim
+of success.
+
+## 1. Root cause of the visual failure
+
+**Not conclusively identified.** What was ruled out, with evidence: the core occlusion
+decision logic and the pixel compositor are NOT the bug (see §3/§4/§5 below — proven with
+real Canvas 2D pixel operations, not just abstract booleans). What remains genuinely
+unknown without a camera: whether the real test shots had hair actually classified as
+overlapping the necklace's real screen position at all (a segmentation coverage/
+resolution question) — §8's new class-distribution readout is built specifically to
+answer this on the next real-device pass, and is the single most informative next
+measurement.
+
+## 2. Is segmentation itself correct?
+
+Real-device observation (already reported): hair/face-skin/clothing regions are
+"visibly segmented" and alignment looks reasonable — unchanged from M6.3, not touched
+by this debugging pass. Class index mapping (0-5) re-verified against the same cited
+Google documentation, unchanged.
+
+## 3. Is the final occlusion mask correct?
+
+**Yes, proven with real pixel data, not just unit-tested booleans.** A new test file,
+`occlusion-pixel.test.ts`, uses the real `canvas` npm package (a genuine C-backed Canvas
+2D implementation, added as a devDependency, its `destination-out` semantics confirmed
+directly against the browser spec before relying on it: erasing a solid blue square's
+left half with a solid black `destination-out` fill produces exactly `[0,0,0,0]` there
+and leaves `[0,0,255,255]` untouched on the right) to run `computeNecklaceOcclusionMask`
+→ `buildOcclusionEraseRgba` → `drawOccludedJewelleryOverlay` — the exact production
+functions — against a synthetic scene, then reads back real output pixels.
+
+**Result**: a hair band crossing the middle of a synthetic necklace sprite is fully
+erased (`[0,0,0,0]`) at the sample point under the hair, while the necklace's own gold
+color remains fully opaque (`[212,175,55,255]`) at a sample point below the attachment
+line where clothes should not occlude it. This holds under both a trivial scale=1/
+rotation=0 transform AND a realistic scale=0.3/rotation=12° transform (using the real
+`computeTransformedBoundingBox` from geometry.ts to derive the footprint, not a
+hand-computed one) — see "real pixel-level compositor under a REALISTIC scaled +
+rotated transform" in the test file.
+
+**One real, minor finding, not a functional bug**: sampling exactly at the necklace's
+own clip-region boundary (1px inset from a corner) shows partial erasure (~63% erased,
+not 100%) when the whole mask is occluding — standard image-smoothing anti-aliasing from
+scaling a low-resolution (e.g. 20×20 or 256×256) mask up to the video's resolution. This
+only affects a thin band at the region's own edge, not its interior, and does not affect
+the realistic hair-crossing scenario above (documented as its own explicit test case,
+not swept under the rug).
+
+## 4. Is the pixel compositor correct?
+
+**Yes** — same evidence as §3. `destination-out` is applied only on an isolated
+offscreen canvas containing nothing but the jewellery sprite (verified directly: the
+composite-mode-at-call-time is recorded in `renderer.test.ts` and shown to be
+`"source-over"` for the sprite draw and `"destination-out"` ONLY for the erase draw,
+never touching the main canvas or the camera layer).
+
+## 5. Synthetic compositor test result
+
+**Passed — 8/8 in `occlusion-pixel.test.ts`** (after fixing the test's own incorrect
+boundary-anti-aliasing expectation, not the production code — see §3). Confirms: THE
+COMPOSITOR IS NOT WRONG, per the real-device review's own stated criterion for that
+conclusion.
+
+## 6. Real-camera hair-over-necklace result
+
+**Not re-tested by this session (no camera).** This is the one thing that actually
+answers whether M6.4 works. New tools built specifically to make the NEXT real test more
+diagnostic than a screenshot alone (§8, §14): the "Show occlusion debug" panel now also
+renders a standalone white/black final-visibility-mask thumbnail (Step 2's exact ask)
+and a live class-distribution percentage readout for the necklace's own region (Step 7/8).
+
+## 7. Mask age
+
+Already reported in one real screenshot: "mask age ≈ 375ms" — comfortably under the
+2000ms stale threshold, so staleness was not the blocker in that observation. `mask
+age`/staleness/tracking-state remain in the debug text readout, unchanged.
+
+## 8. Actual class distribution inside the necklace region
+
+**Not yet measured on a real device — this is new capability, not a retroactive
+number.** `occlusion.ts`'s new `computeCategoryDistribution` computes real
+hair/skin/clothes/background/others percentages within exactly the necklace's own mapped
+region, and `formatCategoryDistribution` renders it in the occlusion debug panel (e.g.
+"Necklace region (142px): hair=18.2% skin=42.1% clothes=31.5% background=0.0%
+others=8.2%"). **This is the single most important number to capture on the next
+real-device test**: if `hairPct` is 0 while hair visibly crosses the necklace on camera,
+the bug is upstream (segmentation/region mapping, contradicting §3's pixel-level proof
+somehow); if `hairPct` is meaningfully positive but the necklace still isn't visibly
+occluded on screen, the bug is downstream of this module (a wiring/display issue this
+pixel test doesn't cover).
+
+## 9. Exact rendering pipeline (as implemented, traced end to end)
+
+```
+1. video drawn onto the MAIN canvas          (renderLiveFrame, unchanged since M6.1)
+2. necklace transform computed                (geometry.ts, unchanged since M6.4's own commit)
+3. necklace footprint (canvas space) derived   (computeTransformedBoundingBox)
+4. footprint + attachment Y -> mask space       (toMaskSpaceRegion, per-axis scale)
+5. per-pixel occlusion decision computed        (computeNecklaceOcclusionMask, pure)
+6. erase RGBA built from that decision          (buildOcclusionEraseRgba, pure)
+7. erase RGBA written into occlusionEraseCanvasRef (putImageData, native mask resolution)
+8. necklace drawn onto occlusionScratchCanvasRef (drawJewelleryOverlay, ISOLATED offscreen canvas)
+9. destination-out erase applied to THAT SAME offscreen canvas only (drawOccludedJewelleryOverlay)
+10. occlusionScratchCanvasRef drawn onto the MAIN canvas          (plain ctx.drawImage, source-over)
+```
+
+Canvas identity at each step, to directly answer Step 4's "no possibility that canvas A
+is modified but canvas B is displayed" concern: exactly ONE offscreen canvas
+(`occlusionScratchCanvasRef.current`) is ever modified by the erase (step 9), and that
+SAME canvas object is what step 10 draws onto the main canvas — confirmed by reading the
+code directly (`occludedNecklaceCanvas = scratchCanvas` is set to the identical object
+`drawOccludedJewelleryOverlay` just wrote into, then `ctx.drawImage(occludedNecklaceCanvas, 0, 0)`
+draws that exact object). There is no second buffer this could silently diverge from.
+
+## 10. Tracking breakdown
+
+**Newly instrumented, not yet measured with this instrumentation on a real device.**
+`tracking.ts`'s `detectFrameWithTiming` (replacing the former `detectFrame` — folded the
+timing in rather than keeping two near-duplicate functions) now times FaceLandmarker and
+PoseLandmarker separately; `formatTrackingBreakdownText` renders it in the main
+performance panel (e.g. "Tracking breakdown -- Face: n=40 avg=Xms p95=Yms / Pose: n=40
+avg=Xms p95=Yms"). The previously reported combined "Tracking ≈ 90-140ms" figures are
+real but undifferentiated between the two models until re-measured with this build.
+
+## 11. Segmentation timing
+
+Unchanged from M6.3's already-reported real numbers: n=31, avg≈234.5ms, p95≈276.5ms,
+min≈199.2ms, max≈288.0ms, at the ~500ms cadence. Confirmed NOT running every frame (Step
+13) — the cadence scheduler is untouched by this debugging pass.
+
+## 12. Compositing timing
+
+**Not yet measured on a real device with the actual occlusion pipeline running.**
+`session.performance.occlusion` (TimingStats, same shape as segmentation's) reports real
+n/avg/p95/min/max the moment occlusion actually runs on your device — read directly from
+the debug panel rather than estimated. Expected to be small (comparable to render's
+already-reported 0.8-3.1ms, since it's a handful of small-canvas pixel operations), but
+that is an expectation, not a claim.
+
+## 13. Actual FPS
+
+Already reported, real, not fabricated: 3-7 FPS across four real tests, with tracking +
+geometry dominating total frame time (89.8-138.6ms) and render itself small (0.8-3.1ms).
+**Not claimed production-ready.** Per Step 15, this is a separate track from occlusion
+correctness and was not touched or optimized in this debugging pass — only instrumented
+further (§10) so the next measurement can say which model actually dominates "tracking."
+
+## 14. Tests added
+
+19 new tests this debugging pass, all passing: `buildFinalVisibilityMaskRgba` (3),
+`computeCategoryDistribution`/`formatCategoryDistribution` (4),
+`occlusion-pixel.test.ts`'s real Canvas 2D synthetic compositor tests (8, per Step 6),
+face/pose detection timing split (2), `formatTrackingBreakdownText` (2).
+
+## 15. Total tests
+
+251 (end of M6.4's original commit) → **270**. Confirmed passing together in a clean run
+(269 passed, 1 pre-existing unrelated flake — `JewelleryCreateForm.test.tsx`, confirmed
+passing in isolation many times across this whole session). One new, environment-load-
+dependent flake was found and is disclosed rather than hidden: `occlusion-pixel.test.ts`
+(the new real-`canvas`-backed test file) can occasionally time out or have its whole
+suite skipped when the full 29-file test suite runs under heavy parallel contention on
+this machine — the native module's one-time initialization cost scales with how many
+worker threads are contending at once (observed directly: instant alone, ~7s at
+18 parallel files, 32-67s+ at 29). A `beforeAll` warmup with a generous timeout (90s)
+was added, and the file passes reliably (confirmed repeatedly) when run alone or as part
+of the 18-file `src/lib/live-ar` directory — this is a test-infrastructure/machine-load
+characteristic of adding a real native dependency, not a defect in the code it tests.
+
+## 16. Build
+
+`npm run build`: succeeds, all 7 routes compile including `/try-on/live`. `npx tsc
+--noEmit`: clean.
+
+## 17. Lint
+
+Before this debugging pass (M6.4's own commit): 61 problems (37 errors, 24 warnings).
+After: **67 problems (43 errors, 24 warnings)** — +6 errors, 0 net new warnings. Checked
+by hand: every new error is another instance of the exact already-documented pattern
+from M6.3/M6.4's own lint sections (a `react-hooks/refs` "ref updated during render" per
+new `useRef`-backed flag, and "cannot access ref value during render" per new
+property-chain argument passed to a new formatter function in JSX) — not a new category
+of issue. `next lint` exits 0 either way.
+
+## 18. Commit
+
+See the commit immediately following this one in `git log` (this debugging pass is
+committed separately from M6.4's original implementation commit, per this project's
+one-focused-change-per-commit convention).
+
+## New diagnostic tools available for the next real-device test
+
+- **"Show occlusion debug" panel** now also shows: a standalone white/black final
+  jewellery-visibility thumbnail (top-right picture-in-picture, Step 2), and a live
+  hair/skin/clothes/background/others percentage breakdown for the necklace's own region
+  (Step 7/8).
+- **"Show performance" panel** now also shows a Face/Pose detection timing breakdown line
+  (Step 10/12).
+- Recommended next real-device test, in order: (1) select a necklace, enable both "Show
+  segmentation debug" and "Show occlusion debug"; (2) cross a visible hair strand over
+  the necklace and read the new "Necklace region: hair=N%" line — if N is meaningfully
+  above 0, segmentation IS detecting hair there; (3) compare the white/black thumbnail
+  against what's actually happening on the main camera view at that same moment; (4)
+  report back what those two specific readouts showed, not just whether the necklace
+  visually changed.

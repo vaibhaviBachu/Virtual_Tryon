@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
 import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
+import { formatCategoryDistribution } from "@/lib/live-ar/occlusion";
 import { NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH } from "@/lib/live-ar/constants";
 import {
   clearSavedNeckFractionOverride,
@@ -19,7 +20,12 @@ import {
   readSavedNeckHorizontalOffsetOverride,
   saveNeckHorizontalOffsetOverride,
 } from "@/lib/live-ar/neck-horizontal-offset-override";
-import { formatOcclusionDebugText, formatPerformanceOverlayText, formatSegmentationDebugText } from "@/lib/live-ar/performance";
+import {
+  formatOcclusionDebugText,
+  formatPerformanceOverlayText,
+  formatSegmentationDebugText,
+  formatTrackingBreakdownText,
+} from "@/lib/live-ar/performance";
 import { createTryOnSession } from "@/lib/tryon-api";
 import type { CategorySlug } from "@/lib/live-ar/types";
 import { cn } from "@/lib/utils";
@@ -292,7 +298,10 @@ export function LiveArStudio() {
 
             {showPerfOverlay && (
               <div className="absolute left-3 top-3 rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-lime-300">
-                {formatPerformanceOverlayText(session.performance)}
+                <div>{formatPerformanceOverlayText(session.performance)}</div>
+                {/* 2026-09-24 real-device review Step 12: split "Tracking" into its
+                    real FaceLandmarker/PoseLandmarker components. */}
+                <div>{formatTrackingBreakdownText(session.performance)}</div>
               </div>
             )}
 
@@ -309,8 +318,27 @@ export function LiveArStudio() {
                 state for real-device verification, never estimated. Dev-only, never
                 part of the customer experience. */}
             {showOcclusionDebug && (
-              <div className="absolute right-3 bottom-3 rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-rose-300">
-                {formatOcclusionDebugText(session.occlusionDebugInfo, session.performance.occlusion)}
+              <div className="absolute right-3 bottom-3 max-w-[70%] rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-rose-300">
+                <div>{formatOcclusionDebugText(session.occlusionDebugInfo, session.performance.occlusion)}</div>
+                {session.occlusionDebugInfo?.distribution && (
+                  <div>{formatCategoryDistribution(session.occlusionDebugInfo.distribution)}</div>
+                )}
+              </div>
+            )}
+
+            {/* 2026-09-24 real-device review Step 2: standalone white/black final
+                visibility mask -- a picture-in-picture panel, deliberately NOT
+                composited onto the camera feed (see finalVisibilityMaskCanvasRef's own
+                doc comment for why). White = jewellery visible, black = occluded. */}
+            {showOcclusionDebug && (
+              <div className="absolute right-3 top-3 flex flex-col items-end gap-1">
+                <span className="rounded bg-black/70 px-1.5 py-0.5 text-[9px] text-white">
+                  Final visibility (white=shown, black=hidden)
+                </span>
+                <canvas
+                  ref={session.finalVisibilityMaskCanvasRef}
+                  className="h-24 w-24 rounded border border-white/40 bg-black/40 [image-rendering:pixelated]"
+                />
               </div>
             )}
           </div>

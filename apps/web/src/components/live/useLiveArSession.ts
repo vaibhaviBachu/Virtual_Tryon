@@ -14,11 +14,14 @@ import {
   SEGMENTATION_INTERVAL_MS_DEFAULT,
 } from "@/lib/live-ar/constants";
 import {
+  buildFinalVisibilityMaskRgba,
   buildOcclusionDebugRgba,
   buildOcclusionEraseRgba,
+  computeCategoryDistribution,
   computeNecklaceOcclusionMask,
   isMaskStale,
   toMaskSpaceRegion,
+  type CategoryDistribution,
 } from "@/lib/live-ar/occlusion";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
@@ -32,7 +35,7 @@ import {
 } from "@/lib/live-ar/renderer";
 import { buildSegmentationDebugRgba, createLiveSegmenter, runSegmentation, SegmentationCadenceScheduler, type LiveSegmenter } from "@/lib/live-ar/segmentation";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
-import { createLiveTrackers, detectFrame, type LiveTrackers } from "@/lib/live-ar/tracking";
+import { createLiveTrackers, detectFrameWithTiming, type LiveTrackers } from "@/lib/live-ar/tracking";
 import { TrackingStateMachine } from "@/lib/live-ar/tracking-state";
 import type { CategorySlug, JewelleryAssetGeometry, LiveTransform, TrackingStatus } from "@/lib/live-ar/types";
 
@@ -139,11 +142,32 @@ export interface UseLiveArSessionResult {
   segmentationStatus: "idle" | "loading" | "ready" | "error";
   segmentationError: string | null;
   /** M6.4 (docs/live-ar-realism-architecture.md §17): throttled diagnostic info for the
-   * occlusion debug panel -- mask age, staleness, and the tracking state occlusion
-   * decisions were made against on the frame this snapshot was taken. Null whenever
-   * there is no necklace overlay to report on this frame (wrong category, no transform,
-   * etc.) -- never a stale/leftover value from a different frame's necklace. */
-  occlusionDebugInfo: { maskAgeMs: number | null; isStale: boolean; trackingStatus: TrackingStatus } | null;
+   * occlusion debug panel -- mask age, staleness, the tracking state occlusion
+   * decisions were made against, and the real segmentation-category breakdown WITHIN
+   * the necklace's own rendered region (2026-09-24 real-device review Step 7/8 --
+   * "print percentage of necklace-region pixels classified as [each category]", so a
+   * real device can show directly whether hair is even detected over the necklace,
+   * rather than guessing from a screenshot). `distribution` is null exactly when there
+   * was no fresh-enough mask to compute it against (stale/missing), same condition as
+   * `occludedNecklaceCanvas` -- see the render loop. Null whenever there is no necklace
+   * overlay to report on this frame at all (wrong category, no transform, etc.) --
+   * never a stale/leftover value from a different frame's necklace. */
+  occlusionDebugInfo: {
+    maskAgeMs: number | null;
+    isStale: boolean;
+    trackingStatus: TrackingStatus;
+    distribution: CategoryDistribution | null;
+  } | null;
+  /** M6.4 real-device review Step 2: a small canvas the render loop draws the FINAL
+   * jewellery-visibility mask into (white = visible, black = occluded, always fully
+   * opaque) -- render it directly via `<canvas ref={session.finalVisibilityMaskCanvasRef} />`
+   * as a standalone picture-in-picture panel, never composited onto the camera feed
+   * (see occlusion.ts's `buildFinalVisibilityMaskRgba` for why that's a separate view
+   * from the semi-transparent in-place overlay `showOcclusionDebug` already draws).
+   * Only updated while `showOcclusionDebug` is on and occlusion actually ran this
+   * frame; stays at its last content otherwise (harmless -- it's not visible unless
+   * the caller chooses to render it, which should itself be gated on the same flag). */
+  finalVisibilityMaskCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
    * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
    * canvas isn't ready yet. */
@@ -166,6 +190,11 @@ export function useLiveArSession({
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // M6.4 real-device review Step 2 -- rendered by the CALLER as a real <canvas>
+  // element (same externally-owned pattern as canvasRef above), so the render loop
+  // below draws into it only once it's actually mounted (null-checked, same as
+  // videoRef/canvasRef already are).
+  const finalVisibilityMaskCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const trackersRef = useRef<LiveTrackers | null>(null);
   // M6.3 -- see the render loop below for why loading/running is unconditional but
@@ -402,7 +431,7 @@ export function useLiveArSession({
       if (!ctx) return;
 
       const t0 = performance.now();
-      const { face, pose } = detectFrame(trackers, video, nowMs);
+      const { face, pose, faceDetectMs, poseDetectMs } = detectFrameWithTiming(trackers, video, nowMs);
       const t1 = performance.now();
 
       // M6.3 (docs/live-ar-realism-architecture.md §6/§8/§17): segmentation runs on its
@@ -506,20 +535,18 @@ export function useLiveArSession({
         const necklaceOverlay = overlays[0];
         const maskAgeMs = segmentationSchedulerRef.current.getLatestAgeMs(frameStartMs);
         const stale = isMaskStale(maskAgeMs, OCCLUSION_STALE_MASK_THRESHOLD_MS);
-        const debugInfo = { maskAgeMs, isStale: stale, trackingStatus: primaryStatus };
-        if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
-          lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
-          setOcclusionDebugInfo(debugInfo);
-        }
-
         const latestMask = segmentationSchedulerRef.current.getLatest();
-        // Step 13: a stale or missing mask falls back to NO occlusion (the necklace
-        // draws exactly as it did before M6.4) rather than trusting old data or
-        // hiding the necklace outright.
-        if (!stale && latestMask) {
-          const occStart = performance.now();
+
+        // M6.4 real-device review (2026-09-24) Step 7/8: the region and the real
+        // category breakdown within it are computed whenever ANY mask exists --
+        // regardless of staleness -- because this is a diagnostic answering "is hair
+        // even detected over the necklace at all," which is useful to see even while
+        // occlusion itself is (correctly) not being applied to a stale mask.
+        let distribution: ReturnType<typeof computeCategoryDistribution> | null = null;
+        let region: ReturnType<typeof toMaskSpaceRegion> | null = null;
+        if (latestMask) {
           const bboxPx = computeTransformedBoundingBox(necklaceOverlay.transform, loaded.geometry);
-          const region = toMaskSpaceRegion(
+          region = toMaskSpaceRegion(
             bboxPx,
             necklaceOverlay.transform.anchorPx.y,
             videoWidthPx,
@@ -527,6 +554,20 @@ export function useLiveArSession({
             latestMask.maskWidthPx,
             latestMask.maskHeightPx
           );
+          distribution = computeCategoryDistribution(latestMask.categoryData, latestMask.maskWidthPx, latestMask.maskHeightPx, region);
+        }
+
+        const debugInfo = { maskAgeMs, isStale: stale, trackingStatus: primaryStatus, distribution };
+        if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
+          lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
+          setOcclusionDebugInfo(debugInfo);
+        }
+
+        // Step 13: a stale or missing mask falls back to NO occlusion (the necklace
+        // draws exactly as it did before M6.4) rather than trusting old data or
+        // hiding the necklace outright.
+        if (!stale && latestMask && region) {
+          const occStart = performance.now();
           const occlusionMask = computeNecklaceOcclusionMask(
             latestMask.categoryData,
             latestMask.maskWidthPx,
@@ -587,6 +628,33 @@ export function useLiveArSession({
                   0,
                   0
                 );
+              }
+
+              // M6.4 real-device review Step 2: the standalone white/black
+              // final-visibility-mask panel -- literally the complement of the erase
+              // pattern just applied above, drawn into the externally-rendered
+              // finalVisibilityMaskCanvasRef (a real <canvas> the caller renders in
+              // JSX, not an internal offscreen buffer) so it can be shown as its own
+              // picture-in-picture thumbnail rather than composited onto the camera.
+              const visibilityCanvas = finalVisibilityMaskCanvasRef.current;
+              if (visibilityCanvas) {
+                if (visibilityCanvas.width !== latestMask.maskWidthPx || visibilityCanvas.height !== latestMask.maskHeightPx) {
+                  visibilityCanvas.width = latestMask.maskWidthPx;
+                  visibilityCanvas.height = latestMask.maskHeightPx;
+                }
+                const visibilityCtx = visibilityCanvas.getContext("2d");
+                if (visibilityCtx) {
+                  const visibilityRgba = buildFinalVisibilityMaskRgba(occlusionMask);
+                  visibilityCtx.putImageData(
+                    new ImageData(
+                      visibilityRgba as Uint8ClampedArray<ArrayBuffer>,
+                      latestMask.maskWidthPx,
+                      latestMask.maskHeightPx
+                    ),
+                    0,
+                    0
+                  );
+                }
               }
             }
           }
@@ -695,6 +763,8 @@ export function useLiveArSession({
         droppedFrame: totalFrameMs > DROPPED_FRAME_THRESHOLD_MS,
         segmentationMs,
         occlusionMs,
+        faceDetectMs,
+        poseDetectMs,
       });
 
       setTrackingStatus(primaryStatus);
@@ -739,6 +809,7 @@ export function useLiveArSession({
     segmentationStatus,
     segmentationError,
     occlusionDebugInfo,
+    finalVisibilityMaskCanvasRef,
     captureFrame,
   };
 }
