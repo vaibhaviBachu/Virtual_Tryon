@@ -1,0 +1,39 @@
+{
+  "status": "prototype_estimated",
+  "source": "existing_diamond_choker_reference_asset",
+  "jewellery_id": "b68b76b3-55ba-4808-869c-4d8266f7aff7",
+  "reference_asset_storage_key": "jewellery/b68b76b3-55ba-4808-869c-4d8266f7aff7/processed/4a524118-bc8d-4305-a5a0-dec74c23b267.png",
+  "disclaimer": "These values are ENGINEERING ESTIMATES derived from the reference image's measured pixel proportions plus a chosen scale anchor. They are NOT physically measured, NOT catalogue-verified, and MUST NOT be written into the production physical_width_mm/physical_height_mm/physical_depth_mm columns for this item.",
+
+  "measured_from_reference_image": {
+    "image_width_px": 1254,
+    "image_height_px": 775,
+    "alpha_bbox_px": [33, 53, 1232, 722],
+    "effective_width_px": 1199,
+    "effective_height_px": 669,
+    "height_to_width_ratio": 0.558,
+    "left_right_symmetry_score": 0.928,
+    "px_per_mm_at_chosen_scale": 6.31
+  },
+
+  "physical_width_mm": 190,
+  "physical_height_mm": 106,
+  "physical_depth_mm": 12,
+  "band_thickness_mm": 80,
+  "central_pendant_width_mm": 34,
+  "central_pendant_height_mm": 38,
+  "drop_length_mm": 26,
+  "horizontal_wrap_sagitta_mm": 18,
+
+  "attachment_type": "neck_choker",
+  "attachment_point_local": { "x": 0, "y": 0, "z": 0 },
+  "attachment_point_description": "Local origin (0,0,0) placed at the horizontal center of the band, at the height where the band's own dense cluster actually begins (measured 23.5% down the bbox height at the center column -- NOT the bbox's literal top-center, which lands on a transparent gap for this asset).",
+  "mirrorable": false,
+
+  "coordinate_convention": {
+    "up": "+Y",
+    "front_facing_normal": "+Z",
+    "left_right": "+X is the photo's own screen-right",
+    "handedness": "right-handed (Three.js default, matches apps/web/src/lib/live-ar/three/three-types.ts)"
+  }
+}
