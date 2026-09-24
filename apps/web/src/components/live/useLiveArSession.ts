@@ -18,10 +18,12 @@ import {
   buildOcclusionDebugRgba,
   buildOcclusionEraseRgba,
   computeCategoryDistribution,
+  computeHairOverlapReport,
   computeNecklaceOcclusionMask,
   isMaskStale,
   toMaskSpaceRegion,
   type CategoryDistribution,
+  type HairOverlapReport,
 } from "@/lib/live-ar/occlusion";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
@@ -154,9 +156,16 @@ export interface UseLiveArSessionResult {
    * never a stale/leftover value from a different frame's necklace. */
   occlusionDebugInfo: {
     maskAgeMs: number | null;
+    maskCapturedAtMs: number | null;
     isStale: boolean;
     trackingStatus: TrackingStatus;
     distribution: CategoryDistribution | null;
+    /** Null exactly when `distribution` is null (same condition -- no mask to derive
+     * either from) OR when occlusion did not actually run this frame (stale mask),
+     * since `finalVisiblePct` specifically reflects the mask occlusion ACTUALLY
+     * applied, not a hypothetical one computed against a mask that was rejected as
+     * stale. */
+    hairOverlap: HairOverlapReport | null;
   } | null;
   /** M6.4 real-device review Step 2: a small canvas the render loop draws the FINAL
    * jewellery-visibility mask into (white = visible, black = occluded, always fully
@@ -557,11 +566,12 @@ export function useLiveArSession({
           distribution = computeCategoryDistribution(latestMask.categoryData, latestMask.maskWidthPx, latestMask.maskHeightPx, region);
         }
 
-        const debugInfo = { maskAgeMs, isStale: stale, trackingStatus: primaryStatus, distribution };
-        if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
-          lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
-          setOcclusionDebugInfo(debugInfo);
-        }
+        // 2026-09-24 controlled real-device validation Step 2/4: "final jewellery
+        // visible percentage" and "HAIR/NECKLACE OVERLAP" reflect the mask ACTUALLY
+        // applied, so this is populated inside the !stale branch below (once
+        // `occlusionMask` exists) and the throttled debugInfo dispatch happens AFTER
+        // that branch runs, using whatever value it ended up setting.
+        let hairOverlap: HairOverlapReport | null = null;
 
         // Step 13: a stale or missing mask falls back to NO occlusion (the necklace
         // draws exactly as it did before M6.4) rather than trusting old data or
@@ -574,6 +584,9 @@ export function useLiveArSession({
             latestMask.maskHeightPx,
             region
           );
+          if (distribution) {
+            hairOverlap = computeHairOverlapReport(occlusionMask, latestMask.maskWidthPx, latestMask.maskHeightPx, region, distribution);
+          }
 
           if (!occlusionEraseCanvasRef.current) occlusionEraseCanvasRef.current = document.createElement("canvas");
           const eraseCanvas = occlusionEraseCanvasRef.current;
@@ -659,6 +672,19 @@ export function useLiveArSession({
             }
           }
           occlusionMs = performance.now() - occStart;
+        }
+
+        const debugInfo = {
+          maskAgeMs,
+          maskCapturedAtMs: segmentationSchedulerRef.current.getLatestCapturedAtMs(),
+          isStale: stale,
+          trackingStatus: primaryStatus,
+          distribution,
+          hairOverlap,
+        };
+        if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
+          lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
+          setOcclusionDebugInfo(debugInfo);
         }
       } else {
         // Wrong category / no necklace overlay this frame -- clear promptly rather

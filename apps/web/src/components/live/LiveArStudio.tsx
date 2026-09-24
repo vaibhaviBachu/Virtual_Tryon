@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
 import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
-import { formatCategoryDistribution } from "@/lib/live-ar/occlusion";
+import { formatCategoryDistribution, formatHairOverlapReport } from "@/lib/live-ar/occlusion";
 import { NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH } from "@/lib/live-ar/constants";
 import {
   clearSavedNeckFractionOverride,
@@ -259,6 +259,7 @@ export function LiveArStudio() {
 
   const cameraBlocked = session.cameraStatus === "error";
   const isLoadingPipeline = session.cameraStatus !== "ready" || session.trackersStatus !== "ready";
+  const maskCapturedAtMs = session.occlusionDebugInfo?.maskCapturedAtMs ?? null;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row">
@@ -322,6 +323,15 @@ export function LiveArStudio() {
                 <div>{formatOcclusionDebugText(session.occlusionDebugInfo, session.performance.occlusion)}</div>
                 {session.occlusionDebugInfo?.distribution && (
                   <div>{formatCategoryDistribution(session.occlusionDebugInfo.distribution)}</div>
+                )}
+                {/* 2026-09-24 controlled real-device validation Step 4 -- the primary
+                    acceptance-test readout: whether hair actually overlaps the
+                    necklace's own region right now, from real pixels. */}
+                {session.occlusionDebugInfo?.hairOverlap && (
+                  <div className="font-bold">{formatHairOverlapReport(session.occlusionDebugInfo.hairOverlap)}</div>
+                )}
+                {maskCapturedAtMs !== null && (
+                  <div>Segmentation timestamp: {maskCapturedAtMs.toFixed(0)}ms (session-relative)</div>
                 )}
               </div>
             )}

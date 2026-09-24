@@ -171,6 +171,17 @@ export class SegmentationCadenceScheduler {
     return nowMs - this.latestResultAtMs;
   }
 
+  /** 2026-09-24 controlled real-device validation Step 2's "Segmentation timestamp" --
+   * the raw `performance.now()`-relative time the current latest result was captured,
+   * null when none has ever succeeded. This is a session-relative timestamp (matching
+   * every other timing value in this codebase, all derived from `performance.now()`),
+   * not wall-clock time -- shown alongside `getLatestAgeMs` in the debug panel, where
+   * the age is the actually useful number; the raw timestamp is exposed for
+   * completeness/exact reproducibility of a specific frame's diagnostic report. */
+  getLatestCapturedAtMs(): number | null {
+    return this.latestResultAtMs;
+  }
+
   reset(): void {
     this.lastRunAtMs = null;
     this.latestResult = null;

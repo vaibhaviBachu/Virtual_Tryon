@@ -290,3 +290,79 @@ describe("real pixel-level compositor under a REALISTIC scaled + rotated transfo
     expect(afterAlpha).toBeLessThan(50); // hair occludes it -- must be (near-)fully erased, not left opaque
   });
 });
+
+// Step 17 of the 2026-09-24 controlled real-device validation: "transparent jewellery
+// pixels" -- a real ring/bangle asset has a transparent hole in its own alpha channel
+// (see M6.1's audit note on this project deliberately never altering a product's own
+// pixels). Confirms destination-out interacts correctly with the SPRITE's own alpha,
+// not just a solid rectangle: where the sprite itself was already transparent, applying
+// occlusion must not somehow make it "more erased" in a way that produces a different
+// (e.g. negative-alpha-clamped-wrong) result -- it must simply stay transparent.
+describe("transparent jewellery pixels (Step 17)", () => {
+  const OUTPUT_W = 100;
+  const OUTPUT_H = 100;
+  const SPRITE_SIZE = 40;
+  const NECKLACE_GOLD: [number, number, number] = [212, 175, 55];
+
+  function ringSprite() {
+    // A solid square with a transparent circular hole cut out of the middle --
+    // mimicking a real bangle/ring asset's own alpha channel.
+    const canvas = createCanvas(SPRITE_SIZE, SPRITE_SIZE);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = `rgb(${NECKLACE_GOLD[0]}, ${NECKLACE_GOLD[1]}, ${NECKLACE_GOLD[2]})`;
+    ctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.beginPath();
+    ctx.arc(SPRITE_SIZE / 2, SPRITE_SIZE / 2, SPRITE_SIZE / 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    return canvas;
+  }
+
+  it("a fully-occluding erase mask still leaves the sprite's own transparent hole transparent, not somehow re-opaqued", () => {
+    const sprite = ringSprite();
+    const transform: LiveTransform = {
+      anchorPx: { x: 50, y: 50 },
+      scaleFactor: 1,
+      rotationDegrees: 0,
+      sourceAnchorPx: { x: SPRITE_SIZE / 2, y: SPRITE_SIZE / 2 },
+      mirrored: false,
+    };
+
+    // Sanity check: the hole really is transparent before any occlusion is applied.
+    const preCanvas = createCanvas(OUTPUT_W, OUTPUT_H);
+    const preCtx = preCanvas.getContext("2d");
+    preCtx.save();
+    preCtx.translate(transform.anchorPx.x, transform.anchorPx.y);
+    preCtx.drawImage(sprite, -transform.sourceAnchorPx.x, -transform.sourceAnchorPx.y);
+    preCtx.restore();
+    expect(preCtx.getImageData(50, 50, 1, 1).data[3]).toBe(0); // center (the hole) is transparent
+    expect(preCtx.getImageData(50, 32, 1, 1).data[3]).toBe(255); // solid gold elsewhere
+
+    // Fully-occluding erase mask (mask resolution irrelevant to this check -- use 4x4 all-255).
+    const MASK = 4;
+    const eraseRgba = buildOcclusionEraseRgba(new Uint8ClampedArray(MASK * MASK).fill(255));
+    const eraseCanvas = createCanvas(MASK, MASK);
+    const eraseCtx = eraseCanvas.getContext("2d");
+    eraseCtx.putImageData(new NodeImageData(eraseRgba, MASK, MASK) as unknown as ImageData, 0, 0);
+
+    const scratchCanvas = createCanvas(OUTPUT_W, OUTPUT_H);
+    const scratchCtx = scratchCanvas.getContext("2d");
+    drawOccludedJewelleryOverlay(
+      scratchCtx as unknown as CanvasRenderingContext2D,
+      sprite as unknown as CanvasImageSource,
+      transform,
+      1,
+      eraseCanvas as unknown as CanvasImageSource,
+      MASK,
+      MASK,
+      OUTPUT_W,
+      OUTPUT_H
+    );
+
+    // The hole (already transparent) stays transparent -- alpha can't go below 0.
+    expect(scratchCtx.getImageData(50, 50, 1, 1).data[3]).toBe(0);
+    // The solid gold area is now erased too, since this mask occludes everywhere.
+    expect(scratchCtx.getImageData(50, 32, 1, 1).data[3]).toBeLessThan(50);
+  });
+});

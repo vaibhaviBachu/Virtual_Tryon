@@ -165,6 +165,16 @@ export function buildFinalVisibilityMaskRgba(occlusionMask: Uint8ClampedArray): 
  * downstream (compositing/display). */
 export interface CategoryDistribution {
   totalPixels: number;
+  // Raw counts -- 2026-09-24 controlled validation Step 2 ("Do not estimate these
+  // numbers"): these are the real per-category pixel counts this function already
+  // tallies internally, exposed directly rather than back-derived (rounded) from the
+  // percentages below.
+  backgroundCount: number;
+  hairCount: number;
+  bodySkinCount: number;
+  faceSkinCount: number;
+  clothesCount: number;
+  othersCount: number;
   backgroundPct: number;
   hairPct: number;
   bodySkinPct: number;
@@ -175,6 +185,12 @@ export interface CategoryDistribution {
 
 const EMPTY_DISTRIBUTION: CategoryDistribution = {
   totalPixels: 0,
+  backgroundCount: 0,
+  hairCount: 0,
+  bodySkinCount: 0,
+  faceSkinCount: 0,
+  clothesCount: 0,
+  othersCount: 0,
   backgroundPct: 0,
   hairPct: 0,
   bodySkinPct: 0,
@@ -209,6 +225,12 @@ export function computeCategoryDistribution(
   const pct = (n: number) => (n / total) * 100;
   return {
     totalPixels: total,
+    backgroundCount: counts[0],
+    hairCount: counts[1],
+    bodySkinCount: counts[2],
+    faceSkinCount: counts[3],
+    clothesCount: counts[4],
+    othersCount: counts[5],
     backgroundPct: pct(counts[0]),
     hairPct: pct(counts[1]),
     bodySkinPct: pct(counts[2]),
@@ -225,6 +247,69 @@ export function formatCategoryDistribution(d: CategoryDistribution): string {
     `Necklace region (${d.totalPixels}px): hair=${d.hairPct.toFixed(1)}% ` +
     `skin=${(d.bodySkinPct + d.faceSkinPct).toFixed(1)}% clothes=${d.clothesPct.toFixed(1)}% ` +
     `background=${d.backgroundPct.toFixed(1)}% others=${d.othersPct.toFixed(1)}%`
+  );
+}
+
+/** 2026-09-24 controlled real-device validation, Step 4: "Add a clear debug indicator:
+ * HAIR/NECKLACE OVERLAP: YES / NO... Determine this from actual pixels." True whenever
+ * at least one real mask pixel within the necklace's own region was classified as
+ * hair -- a plain, honest threshold (>0), not a fabricated confidence score. */
+export function hasHairOverlap(distribution: CategoryDistribution): boolean {
+  return distribution.hairCount > 0;
+}
+
+/** Step 2's "Final jewellery visible percentage" and Step 4's "HAIR/NECKLACE OVERLAP"
+ * line, computed from the ACTUAL occlusion mask the compositor used -- not estimated.
+ * `occlusionMask` is the FULL mask-sized array `computeNecklaceOcclusionMask` returns
+ * (0 outside the necklace's own region by construction), so this scopes its own count
+ * to `region` exactly the same way `computeCategoryDistribution` does -- averaging over
+ * the WHOLE mask would silently understate occlusion, since the necklace's region is
+ * typically a small fraction of the full mask. `occlusionMask` and `distribution` MUST
+ * come from the same region/frame -- callers (useLiveArSession.ts) always compute both
+ * from the same `region`. */
+export interface HairOverlapReport {
+  hairNecklaceOverlap: boolean;
+  hairPct: number;
+  finalVisiblePct: number;
+}
+
+export function computeHairOverlapReport(
+  occlusionMask: Uint8ClampedArray,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  region: OcclusionRegion,
+  distribution: CategoryDistribution
+): HairOverlapReport {
+  const left = Math.max(0, Math.floor(region.leftPx));
+  const top = Math.max(0, Math.floor(region.topPx));
+  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
+  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  if (right <= left || bottom <= top) return { hairNecklaceOverlap: false, hairPct: 0, finalVisiblePct: 100 };
+
+  let occludedCount = 0;
+  let total = 0;
+  for (let y = top; y < bottom; y++) {
+    const rowOffset = y * maskWidthPx;
+    for (let x = left; x < right; x++) {
+      if (occlusionMask[rowOffset + x] !== 0) occludedCount++;
+      total++;
+    }
+  }
+  const finalVisiblePct = total > 0 ? 100 - (occludedCount / total) * 100 : 100;
+  return {
+    hairNecklaceOverlap: hasHairOverlap(distribution),
+    hairPct: distribution.hairPct,
+    finalVisiblePct,
+  };
+}
+
+/** Plain-text rendering matching the exact requested format:
+ * "HAIR/NECKLACE OVERLAP: YES\nHair in necklace region: 23.7%\nFinal jewellery visibility: 82.6%" */
+export function formatHairOverlapReport(r: HairOverlapReport): string {
+  return (
+    `HAIR/NECKLACE OVERLAP: ${r.hairNecklaceOverlap ? "YES" : "NO"} / ` +
+    `Hair in necklace region: ${r.hairPct.toFixed(1)}% / ` +
+    `Final jewellery visibility: ${r.finalVisiblePct.toFixed(1)}%`
   );
 }
 

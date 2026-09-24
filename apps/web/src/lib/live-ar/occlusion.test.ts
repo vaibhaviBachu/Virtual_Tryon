@@ -5,8 +5,11 @@ import {
   buildOcclusionDebugRgba,
   buildOcclusionEraseRgba,
   computeCategoryDistribution,
+  computeHairOverlapReport,
   computeNecklaceOcclusionMask,
   formatCategoryDistribution,
+  formatHairOverlapReport,
+  hasHairOverlap,
   isMaskStale,
   toMaskSpaceRegion,
   type OcclusionRegion,
@@ -171,6 +174,29 @@ describe("toMaskSpaceRegion (coordinate conversion)", () => {
     expect(scaleX).not.toBeCloseTo(scaleY, 3);
     expect(region.attachmentYPx).toBeCloseTo(360 * scaleY, 6);
   });
+
+  // 2026-09-24 controlled real-device validation Step 6: "Test the four corners and
+  // center." A physical point at the video's center/corners must map to the mask's
+  // own center/corners proportionally -- confirms there is no hidden offset or
+  // asymmetric scaling anywhere in the conversion.
+  it("maps the video's four corners and center to the mask's own corresponding corners/center", () => {
+    const videoW = 1280;
+    const videoH = 960;
+    const maskW = 256;
+    const maskH = 256;
+    const points: [string, number, number][] = [
+      ["top-left", 0, 0],
+      ["top-right", videoW, 0],
+      ["bottom-left", 0, videoH],
+      ["bottom-right", videoW, videoH],
+      ["center", videoW / 2, videoH / 2],
+    ];
+    for (const [, px, py] of points) {
+      const region = toMaskSpaceRegion([px, py, px, py], py, videoW, videoH, maskW, maskH);
+      expect(region.leftPx).toBeCloseTo((px / videoW) * maskW, 6);
+      expect(region.topPx).toBeCloseTo((py / videoH) * maskH, 6);
+    }
+  });
 });
 
 describe("isMaskStale", () => {
@@ -244,6 +270,15 @@ describe("computeCategoryDistribution / formatCategoryDistribution (M6.4 real-de
     expect(d.backgroundPct).toBe(0);
   });
 
+  // 2026-09-24 controlled real-device validation Step 2: "Do not estimate these
+  // numbers" -- raw counts must be the real tallies, not back-derived from percentages.
+  it("reports real raw pixel counts alongside the percentages", () => {
+    const d = computeCategoryDistribution(uniformCategoryMask(HAIR, 4, 4), 4, 4, region);
+    expect(d.hairCount).toBe(16);
+    expect(d.clothesCount).toBe(0);
+    expect(d.backgroundCount).toBe(0);
+  });
+
   it("computes real percentages for a mixed region -- this is what would reveal 'no hair actually detected over the necklace' on a real device", () => {
     // 4x4: 4 hair, 4 clothes, 4 background, 4 face-skin.
     const mask = new Uint8Array([
@@ -264,6 +299,74 @@ describe("computeCategoryDistribution / formatCategoryDistribution (M6.4 real-de
     const text = formatCategoryDistribution(d);
     expect(text).toContain("hair=100.0%");
     expect(text).toContain("16px");
+  });
+});
+
+// 2026-09-24 controlled real-device validation, Step 4: "Add a clear debug indicator:
+// HAIR/NECKLACE OVERLAP: YES / NO."
+describe("hasHairOverlap / computeHairOverlapReport / formatHairOverlapReport", () => {
+  const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: 4, bottomPx: 4, attachmentYPx: 2 };
+
+  it("hasHairOverlap is false when zero hair pixels are in-region", () => {
+    const d = computeCategoryDistribution(uniformCategoryMask(BACKGROUND, 4, 4), 4, 4, region);
+    expect(hasHairOverlap(d)).toBe(false);
+  });
+
+  it("hasHairOverlap is true when at least one hair pixel is in-region", () => {
+    const mask = uniformCategoryMask(BACKGROUND, 4, 4);
+    mask[5] = HAIR; // one single hair pixel
+    const d = computeCategoryDistribution(mask, 4, 4, region);
+    expect(hasHairOverlap(d)).toBe(true);
+  });
+
+  it("NO HAIR OVERLAP case: hair away from the necklace -- overlap=false, hairPct=0, necklace fully visible (Step 7's control condition)", () => {
+    const categoryMask = uniformCategoryMask(BACKGROUND, 4, 4); // no hair anywhere
+    const distribution = computeCategoryDistribution(categoryMask, 4, 4, region);
+    const occlusionMask = computeNecklaceOcclusionMask(categoryMask, 4, 4, region);
+    const report = computeHairOverlapReport(occlusionMask, 4, 4, region, distribution);
+    expect(report.hairNecklaceOverlap).toBe(false);
+    expect(report.hairPct).toBe(0);
+    expect(report.finalVisiblePct).toBe(100);
+  });
+
+  it("HAIR OVERLAP case: hair crossing the necklace -- overlap=true, hairPct>0, visibility reduced accordingly (Step 8's primary acceptance test)", () => {
+    // Half the region is hair, half is background.
+    const categoryMask = new Uint8Array(16);
+    for (let y = 0; y < 4; y++) {
+      categoryMask[y * 4 + 0] = HAIR;
+      categoryMask[y * 4 + 1] = HAIR;
+      categoryMask[y * 4 + 2] = BACKGROUND;
+      categoryMask[y * 4 + 3] = BACKGROUND;
+    }
+    const distribution = computeCategoryDistribution(categoryMask, 4, 4, region);
+    const occlusionMask = computeNecklaceOcclusionMask(categoryMask, 4, 4, region);
+    const report = computeHairOverlapReport(occlusionMask, 4, 4, region, distribution);
+    expect(report.hairNecklaceOverlap).toBe(true);
+    expect(report.hairPct).toBeCloseTo(50, 6);
+    expect(report.finalVisiblePct).toBeCloseTo(50, 6); // exactly the non-hair half remains visible
+  });
+
+  it("degenerate/empty region reports no overlap and full visibility rather than throwing", () => {
+    const degenerate: OcclusionRegion = { leftPx: 10, topPx: 10, rightPx: 10, bottomPx: 10, attachmentYPx: 0 };
+    const categoryMask = uniformCategoryMask(HAIR, 4, 4);
+    const distribution = computeCategoryDistribution(categoryMask, 4, 4, degenerate);
+    const occlusionMask = computeNecklaceOcclusionMask(categoryMask, 4, 4, degenerate);
+    const report = computeHairOverlapReport(occlusionMask, 4, 4, degenerate, distribution);
+    expect(report.hairNecklaceOverlap).toBe(false);
+    expect(report.finalVisiblePct).toBe(100);
+  });
+
+  it("formatHairOverlapReport renders the exact requested format", () => {
+    const text = formatHairOverlapReport({ hairNecklaceOverlap: true, hairPct: 23.7, finalVisiblePct: 82.6 });
+    expect(text).toContain("HAIR/NECKLACE OVERLAP: YES");
+    expect(text).toContain("Hair in necklace region: 23.7%");
+    expect(text).toContain("Final jewellery visibility: 82.6%");
+  });
+
+  it("formatHairOverlapReport renders NO when there is no overlap", () => {
+    expect(formatHairOverlapReport({ hairNecklaceOverlap: false, hairPct: 0, finalVisiblePct: 100 })).toContain(
+      "HAIR/NECKLACE OVERLAP: NO"
+    );
   });
 });
 

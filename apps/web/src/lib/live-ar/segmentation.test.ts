@@ -135,6 +135,34 @@ describe("SegmentationCadenceScheduler", () => {
       expect(scheduler.getLatestAgeMs(1001)).toBeNull();
     });
   });
+
+  // 2026-09-24 controlled real-device validation Step 2's "Segmentation timestamp."
+  describe("getLatestCapturedAtMs", () => {
+    it("is null before any run has ever succeeded", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      expect(scheduler.getLatestCapturedAtMs()).toBeNull();
+    });
+
+    it("returns the exact timestamp of the last SUCCESSFUL run", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1234, fakeResult(4, 4));
+      expect(scheduler.getLatestCapturedAtMs()).toBe(1234);
+    });
+
+    it("does not advance on a failed run", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1000, fakeResult(4, 4));
+      scheduler.recordRun(1500, null);
+      expect(scheduler.getLatestCapturedAtMs()).toBe(1000);
+    });
+
+    it("resets to null after reset()", () => {
+      const scheduler = new SegmentationCadenceScheduler(500);
+      scheduler.recordRun(1000, fakeResult(4, 4));
+      scheduler.reset();
+      expect(scheduler.getLatestCapturedAtMs()).toBeNull();
+    });
+  });
 });
 
 describe("buildSegmentationDebugRgba", () => {

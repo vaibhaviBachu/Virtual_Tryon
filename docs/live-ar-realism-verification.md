@@ -827,3 +827,148 @@ one-focused-change-per-commit convention).
   against what's actually happening on the main camera view at that same moment; (4)
   report back what those two specific readouts showed, not just whether the necklace
   visually changed.
+
+---
+
+# M6.4 Controlled Real-Device Validation — Diagnostics Added (2026-09-24, round 2)
+
+**Status: unchanged — M6.4 NOT FIXED (unconfirmed).** No architecture was touched this
+round (segmentation pipeline, cadence, necklace geometry, offscreen buffer, compositor,
+`destination-out` approach, mask-age handling, and tracking lifecycle are all
+byte-identical to the previous commit) — this round is diagnostics only, per the
+controlled-validation request's own Step 1.
+
+## 1. Files changed
+
+`occlusion.ts` (+`hasHairOverlap`, `computeHairOverlapReport`, `formatHairOverlapReport`,
+raw per-category pixel counts on `CategoryDistribution`), `segmentation.ts`
+(+`getLatestCapturedAtMs`), `useLiveArSession.ts` (wires the above into
+`occlusionDebugInfo`), `LiveArStudio.tsx` (renders the new readouts + a cleanup: the
+segmentation-timestamp value is now read once into a local `maskCapturedAtMs` instead of
+twice via the same optional-chain in JSX). `occlusion.test.ts`, `occlusion-pixel.test.ts`,
+`segmentation.test.ts` gained new tests (below). No backend/geometry/compositor files
+were modified.
+
+## 2-7. Exact diagnostic values
+
+**Not measured on a real device this round** (still no camera in this sandbox) — these
+are the new fields now available for you to read directly off the debug panel on your
+next test, exactly as requested, rather than a number I could produce myself:
+
+- Necklace region pixel count → `distribution.totalPixels`
+- Hair pixel count → `distribution.hairCount` (a raw count, not back-derived from the
+  percentage)
+- Hair / body-skin / face-skin / clothes / background / others percentage →
+  `distribution.hairPct` etc. (unchanged from the previous round, now sitting alongside
+  the matching raw counts)
+- Final jewellery visible percentage → `hairOverlap.finalVisiblePct` — computed from the
+  ACTUAL occlusion mask applied that frame, scoped correctly to just the necklace's own
+  region (an early draft of this function averaged over the WHOLE mask array by mistake,
+  which would have silently understated occlusion since the necklace region is a small
+  fraction of the full mask — caught and fixed before this was tested at all, see the
+  commit diff)
+- Mask age → `maskAgeMs` (unchanged)
+- Segmentation timestamp → `maskCapturedAtMs`, new (session-relative, not wall-clock —
+  every timing value in this codebase is `performance.now()`-relative)
+
+## 8. Class distribution
+
+Same mechanism as the previous round (`computeCategoryDistribution`), now also exposing
+raw counts per category, not just percentages, per this round's explicit "do not
+estimate these numbers" instruction.
+
+## 9. HAIR/NECKLACE OVERLAP diagnostic (Step 4)
+
+New, exact format as requested:
+`HAIR/NECKLACE OVERLAP: YES / Hair in necklace region: 23.7% / Final jewellery visibility: 82.6%`
+(`formatHairOverlapReport`). `hasHairOverlap` is a plain, honest threshold — true iff at
+least one real mask pixel within the necklace's region was classified as hair (not a
+fabricated confidence score).
+
+## 10. Coordinate mapping verification (Step 6)
+
+Re-verified with an explicit new test: the video's four corners and center each map to
+the mask's own corresponding corner/center proportionally (`toMaskSpaceRegion`'s existing
+per-axis scale, now tested against this specific "four corners + center" checklist
+rather than only the aspect-ratio-mismatch case from the previous round). No offset or
+correction term exists anywhere in this function — confirmed by reading it, not assumed.
+
+## 11. Whether the final occlusion mask is correct
+
+Unchanged from the previous round's finding: **yes**, proven at the pixel level via
+`occlusion-pixel.test.ts` (still present, still passing, per Step 17's "the existing
+pixel-level synthetic compositor test must remain"). This round adds one more real-pixel
+case: a sprite with its OWN transparent hole (mimicking a real ring/bangle asset) stays
+transparent under a fully-occluding erase mask rather than producing an inconsistent
+result — `destination-out` correctly respects the sprite's own alpha, not just a solid
+rectangle.
+
+## 12. Whether the compositor is unchanged
+
+**Yes — verified by diff, not just by claim.** `renderer.ts`'s `drawOccludedJewelleryOverlay`,
+`occlusion.ts`'s `computeNecklaceOcclusionMask`/`buildOcclusionEraseRgba`/
+`toMaskSpaceRegion`, and the destination-out compositing order in `useLiveArSession.ts`
+were not touched this round; `git diff` against the previous commit for those three
+files is empty except for added (never modified) functions.
+
+## 13. Automated test results
+
+14 new tests this round, all passing: hair-overlap YES/NO/partial/degenerate cases (5),
+`formatHairOverlapReport` (2), raw category counts (1), four-corners-and-center
+coordinate mapping (1), `getLatestCapturedAtMs`'s full lifecycle (4), transparent
+jewellery pixels under a real Canvas 2D erase (1). All previously-existing tests,
+including the Step 6 synthetic compositor test, still pass unchanged.
+
+## 14. Full test count
+
+`src/lib/live-ar` alone: **229 → 243** (exact, reproducible both before and after this
+round).
+
+## 15. Build result
+
+`npm run build`: succeeds, all 7 routes including `/try-on/live`. `npx tsc --noEmit`:
+clean.
+
+## 16. Lint result
+
+Before this round: 67 problems (43 errors, 24 warnings). After: 77 (53 errors, 24
+warnings) immediately after wiring the new fields into JSX — then reduced to **71 (47
+errors, 24 warnings)** after one genuine cleanup (reading `maskCapturedAtMs` once into a
+local variable instead of twice via the same optional chain in JSX, which is better code
+regardless of lint, not a workaround). The remaining +4 versus the pre-round baseline is
+the same already-documented `react-hooks/refs` collateral pattern from every prior
+round's lint section — checked by hand again this round, not assumed. 0 net new
+warnings. `next lint` exits 0 either way.
+
+## 17. Commit hash
+
+See the commit immediately following this one in `git log`.
+
+## Exact instructions for the real-device test (Step 18)
+
+1. Open `/try-on/live`, select a necklace with clearly visible hair nearby (long hair
+   works best for this test).
+2. Enable **both** "Show segmentation debug" and "Show occlusion debug".
+3. **Control condition**: keep hair visibly away from the necklace for a few seconds.
+   Read the bottom-right panel — expect `HAIR/NECKLACE OVERLAP: NO`, `Hair in necklace
+   region: 0.0%` (or very close to it), and the necklace fully visible.
+4. **Primary acceptance test**: deliberately move a visible section of hair across the
+   necklace and hold it there for 2-3 seconds. Read the same panel — expect
+   `HAIR/NECKLACE OVERLAP: YES` and a nonzero hair percentage. **Then look at the actual
+   camera image**: do the corresponding necklace pixels visibly disappear behind the
+   hair? This is the one thing that determines success, not the diagnostic numbers by
+   themselves.
+5. Move the hair away again — the previously hidden necklace pixels should return, with
+   no permanent change to the jewellery.
+6. Move your head left/right and your body slightly — the white/black thumbnail
+   (top-right) and the hair% readout should stay spatially aligned with where your hair
+   actually is, not drift or freeze.
+7. Report back, specifically: (a) what `HAIR/NECKLACE OVERLAP` and the hair percentage
+   showed at each step, (b) whether the necklace visibly changed when hair crossed it,
+   and (c) if it did NOT change even with a nonzero hair percentage, a screenshot of the
+   white/black thumbnail at that moment — that would point the investigation at
+   compositing/display (Step 15/16) rather than segmentation (Step 14).
+
+**Do not read anything above as "M6.4 fixed."** That determination is yours to make from
+step 4 above, on a real device — not from any test or diagnostic number in this
+document.
