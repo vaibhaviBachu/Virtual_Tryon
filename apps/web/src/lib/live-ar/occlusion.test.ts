@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyJewelleryAlphaToOcclusionMask,
   buildFinalVisibilityMaskRgba,
+  clipRegionToMask,
+  computeAlphaDownscaleSourceRect,
+  buildJewelleryAlphaDebugRgba,
   buildOcclusionDebugRgba,
   buildOcclusionEraseRgba,
   computeCategoryDistribution,
   computeHairOverlapReport,
+  computeJewelleryAlphaOcclusionReport,
   computeNecklaceOcclusionMask,
   formatCategoryDistribution,
   formatHairOverlapReport,
+  formatJewelleryAlphaOcclusionReport,
   hasHairOverlap,
   isMaskStale,
   toMaskSpaceRegion,
@@ -135,6 +141,72 @@ describe("computeNecklaceOcclusionMask", () => {
     const region: OcclusionRegion = { leftPx: -5, topPx: -5, rightPx: 100, bottomPx: 100, attachmentYPx: 0 };
     expect(() => computeNecklaceOcclusionMask(mask, 4, 4, region)).not.toThrow();
     expect(Array.from(computeNecklaceOcclusionMask(mask, 4, 4, region))).toEqual(new Array(16).fill(255));
+  });
+});
+
+// Extracted as one shared implementation (2026-09-24) after this exact clip logic was
+// found duplicated in five different functions in this file.
+describe("clipRegionToMask", () => {
+  it("floors the top-left and ceils the bottom-right, clamped to the mask bounds", () => {
+    const clip = clipRegionToMask({ leftPx: 1.2, topPx: 1.9, rightPx: 3.1, bottomPx: 3.9, attachmentYPx: 0 }, 10, 10);
+    expect(clip).toEqual({ left: 1, top: 1, right: 4, bottom: 4, width: 3, height: 3 });
+  });
+
+  it("clamps to the mask's own bounds when the region extends past them", () => {
+    const clip = clipRegionToMask({ leftPx: -5, topPx: -5, rightPx: 100, bottomPx: 100, attachmentYPx: 0 }, 10, 10);
+    expect(clip).toEqual({ left: 0, top: 0, right: 10, bottom: 10, width: 10, height: 10 });
+  });
+
+  it("reports zero width/height (not negative) for a fully out-of-bounds region", () => {
+    const clip = clipRegionToMask({ leftPx: 50, topPx: 50, rightPx: 60, bottomPx: 60, attachmentYPx: 0 }, 10, 10);
+    expect(clip.width).toBe(0);
+    expect(clip.height).toBe(0);
+  });
+});
+
+// 2026-09-24 controlled real-device validation Step 5/6/12: the coordinate math that
+// keeps the jewellery's own alpha aligned under any transform. Pure -- see
+// occlusion-pixel.test.ts for the end-to-end real-pixel confirmation of the same
+// scale/rotation/translation cases using the real Canvas 2D pipeline.
+describe("computeAlphaDownscaleSourceRect", () => {
+  it("maps the unclipped region back to exactly (0,0)-sized-to-bbox when nothing was clipped", () => {
+    // video 1000x1000, mask 100x100 -> scale 0.1 on each axis. A bbox at canvas
+    // (200,300)-(400,500) (200x200) maps to region (20,30)-(40,50) in mask space,
+    // which is NOT clipped (fully inside [0,100)).
+    const region: OcclusionRegion = { leftPx: 20, topPx: 30, rightPx: 40, bottomPx: 50, attachmentYPx: 0 };
+    const clip = clipRegionToMask(region, 100, 100);
+    const rect = computeAlphaDownscaleSourceRect(region, clip, 1000, 1000, 100, 100);
+    // No clipping occurred, so the source rect must be exactly the bbox's own local
+    // (0,0)-sized-to-(200,200) span -- i.e. sx=sy=0, sw=sh=200 (bboxWidthPx/HeightPx).
+    expect(rect.sx).toBeCloseTo(0, 6);
+    expect(rect.sy).toBeCloseTo(0, 6);
+    expect(rect.sw).toBeCloseTo(200, 6);
+    expect(rect.sh).toBeCloseTo(200, 6);
+  });
+
+  it("skips the off-frame portion of the local canvas when the bbox is partially clipped on the left/top", () => {
+    // Bbox at canvas (-50, -50)-(150, 150) (200x200), video 1000x1000, mask 100x100
+    // (scale 0.1). Unclipped region would be (-5,-5)-(15,15); clipped to (0,0)-(15,15).
+    const region: OcclusionRegion = { leftPx: -5, topPx: -5, rightPx: 15, bottomPx: 15, attachmentYPx: 0 };
+    const clip = clipRegionToMask(region, 100, 100);
+    const rect = computeAlphaDownscaleSourceRect(region, clip, 1000, 1000, 100, 100);
+    // clip.left(0) - region.leftPx(-5) = 5 mask px = 50 local (video-space) px skipped.
+    expect(rect.sx).toBeCloseTo(50, 6);
+    expect(rect.sy).toBeCloseTo(50, 6);
+    expect(rect.sw).toBeCloseTo(150, 6); // clip.width(15) / scale(0.1)
+    expect(rect.sh).toBeCloseTo(150, 6);
+  });
+
+  it("uses independent per-axis scale factors, matching toMaskSpaceRegion's own convention", () => {
+    // Non-square video (1280x720) against a square mask (256x256) -- scaleX != scaleY.
+    const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: 100, bottomPx: 50, attachmentYPx: 0 };
+    const clip = clipRegionToMask(region, 256, 256);
+    const rect = computeAlphaDownscaleSourceRect(region, clip, 1280, 720, 256, 256);
+    const scaleX = 256 / 1280;
+    const scaleY = 256 / 720;
+    expect(rect.sw).toBeCloseTo(100 / scaleX, 6);
+    expect(rect.sh).toBeCloseTo(50 / scaleY, 6);
+    expect(scaleX).not.toBeCloseTo(scaleY, 3);
   });
 });
 
@@ -367,6 +439,272 @@ describe("hasHairOverlap / computeHairOverlapReport / formatHairOverlapReport", 
     expect(formatHairOverlapReport({ hairNecklaceOverlap: false, hairPct: 0, finalVisiblePct: 100 })).toContain(
       "HAIR/NECKLACE OVERLAP: NO"
     );
+  });
+});
+
+// 2026-09-24 controlled validation, Step 1-4/12: the central correction -- occlusion
+// must require the jewellery's OWN real alpha to be present, not just "somewhere inside
+// the bounding rectangle." All fixtures below use a 6x6 mask region [0,0)-[6,6) with
+// the jewellery's REAL alpha occupying only a small block inside that region (e.g.
+// (2,2)-(4,4)), leaving a deliberately large transparent gap within the same bounding
+// box -- exactly the shape of the real-device finding (a necklace asset has large
+// transparent areas inside its own bounding rectangle).
+describe("applyJewelleryAlphaToOcclusionMask (Step 4's core correction)", () => {
+  const REGION_SIZE = 6;
+  const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: REGION_SIZE, bottomPx: REGION_SIZE, attachmentYPx: 3 };
+
+  // Jewellery alpha present only at (2,2), (3,2), (2,3), (3,3) -- a 2x2 block, fully
+  // opaque. Everywhere else in the 6x6 region is transparent (alpha 0).
+  function jewelleryAlphaBlock(): Uint8ClampedArray {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    for (const y of [2, 3]) {
+      for (const x of [2, 3]) alpha[y * REGION_SIZE + x] = 255;
+    }
+    return alpha;
+  }
+
+  // 1. Hair inside bounding box but outside jewellery alpha -> zero jewellery occlusion.
+  it("hair filling the whole bounding box EXCEPT the jewellery's own alpha -> zero occlusion", () => {
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    // The jewellery's own footprint is classified background (no hair there at all).
+    for (const y of [2, 3]) for (const x of [2, 3]) categoryData[y * REGION_SIZE + x] = BACKGROUND;
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, jewelleryAlphaBlock());
+    expect(refined.every((v) => v === 0)).toBe(true);
+  });
+
+  // 2. Hair directly overlapping jewellery alpha -> exact overlapping pixels occluded.
+  it("hair exactly at the jewellery's own alpha block -> exactly those pixels occlude, nothing else", () => {
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    for (const y of [2, 3]) for (const x of [2, 3]) categoryData[y * REGION_SIZE + x] = HAIR;
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, jewelleryAlphaBlock());
+    for (const y of [2, 3]) for (const x of [2, 3]) expect(refined[y * REGION_SIZE + x]).toBe(255);
+    expect(Array.from(refined).filter((v) => v === 255)).toHaveLength(4);
+  });
+
+  // 3. Hair partially overlapping jewellery -> only overlapping pixels occluded.
+  it("hair covering half the jewellery block and extending into transparent space -> only the overlapping half occludes", () => {
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    // Hair covers column x=2 (both jewellery rows) AND spills into transparent x=0,1.
+    for (const y of [2, 3]) {
+      categoryData[y * REGION_SIZE + 0] = HAIR;
+      categoryData[y * REGION_SIZE + 1] = HAIR;
+      categoryData[y * REGION_SIZE + 2] = HAIR;
+    }
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, jewelleryAlphaBlock());
+    expect(refined[2 * REGION_SIZE + 2]).toBe(255); // overlaps jewellery -> occludes
+    expect(refined[3 * REGION_SIZE + 2]).toBe(255);
+    expect(refined[2 * REGION_SIZE + 3]).toBe(0); // jewellery pixel, but no hair here
+    expect(refined[2 * REGION_SIZE + 0]).toBe(0); // hair, but no jewellery here (transparent)
+    expect(refined[2 * REGION_SIZE + 1]).toBe(0);
+  });
+
+  // 4. Hair completely covering a jewellery section -> that section hidden.
+  it("hair completely covering the jewellery block -> the whole block occludes", () => {
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, jewelleryAlphaBlock());
+    for (const y of [2, 3]) for (const x of [2, 3]) expect(refined[y * REGION_SIZE + x]).toBe(255);
+  });
+
+  // 5. Transparent jewellery pixels -> remain transparent and irrelevant to occlusion.
+  it("a fully-hair category mask with an all-transparent jewellery alpha (nothing rendered there at all) -> zero occlusion everywhere", () => {
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const noAlpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE); // all zero
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, noAlpha);
+    expect(refined.every((v) => v === 0)).toBe(true);
+  });
+
+  // 6. Anti-aliased jewellery edge -> alpha preserved appropriately (threshold behavior).
+  it("respects the alpha threshold for partially-transparent (anti-aliased) edge pixels", () => {
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const edgeAlpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    edgeAlpha[2 * REGION_SIZE + 2] = 5; // below default threshold (10) -- treated as "no jewellery"
+    edgeAlpha[2 * REGION_SIZE + 3] = 128; // well above threshold -- treated as real jewellery
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, edgeAlpha);
+    expect(refined[2 * REGION_SIZE + 2]).toBe(0);
+    expect(refined[2 * REGION_SIZE + 3]).toBe(255);
+  });
+
+  // 7. Clothing overlapping jewellery -> only actual jewellery pixels affected, and only
+  // above the attachment point (the pre-existing rule, still respected).
+  it("clothing over the jewellery block occludes only the portion at/above the attachment point", () => {
+    // Move the jewellery alpha block to straddle the attachment line: rows 2 (above,
+    // attachmentYPx=3) and 4 (below).
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    alpha[2 * REGION_SIZE + 2] = 255; // row 2 <= attachmentYPx(3)
+    alpha[4 * REGION_SIZE + 2] = 255; // row 4 > attachmentYPx(3)
+    const categoryData = uniformCategoryMask(CLOTHES, REGION_SIZE, REGION_SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, alpha);
+    expect(refined[2 * REGION_SIZE + 2]).toBe(255); // above attachment -- occludes
+    expect(refined[4 * REGION_SIZE + 2]).toBe(0); // below attachment -- never occludes, even with real jewellery alpha there
+  });
+
+  // 8. Background -> never occludes, even where jewellery alpha is fully present.
+  it("background never occludes, even directly over the jewellery's own alpha", () => {
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, jewelleryAlphaBlock());
+    expect(refined.every((v) => v === 0)).toBe(true);
+  });
+
+  // 9. Skin -> retains current (never-occludes) behavior, even directly over jewellery alpha.
+  it("body-skin and face-skin never occlude, even directly over the jewellery's own alpha", () => {
+    for (const category of [BODY_SKIN, FACE_SKIN]) {
+      const categoryData = uniformCategoryMask(category, REGION_SIZE, REGION_SIZE);
+      const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+      const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, jewelleryAlphaBlock());
+      expect(refined.every((v) => v === 0)).toBe(true);
+    }
+  });
+
+  it("never ADDS occlusion beyond what the category rule proposed -- pure AND, never OR", () => {
+    // Category rule says nothing occludes (all background); alpha is fully present
+    // everywhere. Refinement must still show zero occlusion.
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const fullAlpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, fullAlpha);
+    expect(refined.every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe("computeJewelleryAlphaOcclusionReport / formatJewelleryAlphaOcclusionReport (Step 8)", () => {
+  const REGION_SIZE = 6;
+  const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: REGION_SIZE, bottomPx: REGION_SIZE, attachmentYPx: 3 };
+
+  it("reports the correct denominator: jewellery pixel count, NOT bounding-box pixel count", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    for (const y of [2, 3]) for (const x of [2, 3]) alpha[y * REGION_SIZE + x] = 255; // 4 real jewellery px
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE); // hair everywhere (36 px)
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, alpha);
+    const report = computeJewelleryAlphaOcclusionReport(categoryData, refined, REGION_SIZE, REGION_SIZE, region, alpha);
+    expect(report.jewelleryPixelCount).toBe(4); // NOT 36
+    expect(report.hairOverJewelleryPixelCount).toBe(4);
+    expect(report.hairOverJewelleryPct).toBe(100);
+    expect(report.finalVisiblePixelCount).toBe(0);
+    expect(report.finalVisibilityPct).toBe(0);
+  });
+
+  it("matches the exact real-device scenario that prompted this correction: hair beside (not on) the jewellery", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    for (const y of [2, 3]) for (const x of [2, 3]) alpha[y * REGION_SIZE + x] = 255;
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    // Hair fills the region EXCEPT the jewellery's own footprint -- "beside," not "on."
+    for (let i = 0; i < categoryData.length; i++) if (categoryData[i] === BACKGROUND) categoryData[i] = HAIR;
+    for (const y of [2, 3]) for (const x of [2, 3]) categoryData[y * REGION_SIZE + x] = BACKGROUND;
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, REGION_SIZE, REGION_SIZE, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, alpha);
+    const report = computeJewelleryAlphaOcclusionReport(categoryData, refined, REGION_SIZE, REGION_SIZE, region, alpha);
+    // The bounding-box-only metric would have reported ~89% hair (32/36); the corrected
+    // metric reports 0% hair actually over the jewellery, and full visibility.
+    expect(report.hairOverJewelleryPct).toBe(0);
+    expect(report.finalVisibilityPct).toBe(100);
+  });
+
+  it("degenerate/empty region reports zero jewellery pixels rather than throwing", () => {
+    const degenerate: OcclusionRegion = { leftPx: 10, topPx: 10, rightPx: 10, bottomPx: 10, attachmentYPx: 0 };
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    const refined = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    const report = computeJewelleryAlphaOcclusionReport(
+      categoryData,
+      refined,
+      REGION_SIZE,
+      REGION_SIZE,
+      degenerate,
+      new Uint8ClampedArray(0)
+    );
+    expect(report.jewelleryPixelCount).toBe(0);
+    expect(report.finalVisibilityPct).toBe(100);
+  });
+
+  it("formatJewelleryAlphaOcclusionReport shows the bounding-box, hair, clothes, and final-visibility metrics side by side", () => {
+    const report = {
+      jewelleryPixelCount: 4,
+      hairOverJewelleryPixelCount: 1,
+      hairOverJewelleryPct: 25,
+      clothesOverJewelleryPixelCount: 2,
+      clothesOverJewelleryPct: 50,
+      finalVisiblePixelCount: 3,
+      finalVisibilityPct: 75,
+    };
+    const text = formatJewelleryAlphaOcclusionReport(24.7, report);
+    expect(text).toContain("bounding box: hair=24.7%");
+    expect(text).toContain("(4px)");
+    expect(text).toContain("hair-over-jewellery=25.0% (1px)");
+    expect(text).toContain("clothes-over-jewellery=50.0% (2px)");
+    expect(text).toContain("Final jewellery visible px=3 (75.0%)");
+  });
+
+  // 2026-09-24, round 2: "Clothing-over-jewellery: XX.X%" -- a raw diagnostic,
+  // deliberately NOT respecting the attachment-line rule (that rule still governs
+  // actual occlusion; this metric exists to show clothing IS detected there even when
+  // it correctly doesn't occlude).
+  it("reports clothes-over-jewellery independently of the attachment-line occlusion rule", () => {
+    const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: 4, bottomPx: 4, attachmentYPx: 0 }; // attachment at the very top
+    const alpha = new Uint8ClampedArray(16).fill(255); // jewellery alpha everywhere
+    const categoryData = uniformCategoryMask(CLOTHES, 4, 4); // clothes everywhere
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, 4, 4, region);
+    const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, 4, 4, region, alpha);
+    const report = computeJewelleryAlphaOcclusionReport(categoryData, refined, 4, 4, region, alpha);
+    // Every row except row 0 is below the attachment line, so occlusion only applies
+    // to 4 of the 16 pixels -- but ALL 16 are still reported as clothes-over-jewellery.
+    expect(report.clothesOverJewelleryPixelCount).toBe(16);
+    expect(report.clothesOverJewelleryPct).toBe(100);
+    expect(report.finalVisiblePixelCount).toBe(12); // 16 - 4 occluded (row 0 only)
+  });
+});
+
+describe("buildJewelleryAlphaDebugRgba (Step 9)", () => {
+  const REGION_SIZE = 4;
+  const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: REGION_SIZE, bottomPx: REGION_SIZE, attachmentYPx: 2 };
+
+  it("is black wherever jewellery alpha is absent, regardless of category", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE); // all transparent
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    for (let i = 0; i < REGION_SIZE * REGION_SIZE; i++) {
+      expect([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3]]).toEqual([0, 0, 0, 255]);
+    }
+  });
+
+  it("is green where jewellery alpha is present and nothing occludes", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    expect([rgba[0], rgba[1], rgba[2], rgba[3]]).toEqual([0, 255, 0, 255]);
+  });
+
+  it("is red where hair overlaps real jewellery alpha", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
+    const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    expect([rgba[0], rgba[1], rgba[2], rgba[3]]).toEqual([255, 0, 0, 255]);
+  });
+
+  it("is blue where clothing overlaps real jewellery alpha at/above the attachment point", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
+    const categoryData = uniformCategoryMask(CLOTHES, REGION_SIZE, REGION_SIZE);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    // row 0 is <= attachmentYPx(2) -> blue.
+    expect([rgba[0], rgba[1], rgba[2], rgba[3]]).toEqual([0, 0, 255, 255]);
+    // row 3 is > attachmentYPx(2) -> clothing doesn't occlude there -> reads as visible jewellery (green).
+    const row3Offset = 3 * REGION_SIZE * 4;
+    expect([rgba[row3Offset], rgba[row3Offset + 1], rgba[row3Offset + 2], rgba[row3Offset + 3]]).toEqual([0, 255, 0, 255]);
+  });
+
+  it("is always fully opaque and exactly maskWidthPx*maskHeightPx*4 bytes", () => {
+    const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    expect(rgba.length).toBe(REGION_SIZE * REGION_SIZE * 4);
+    for (let i = 0; i < REGION_SIZE * REGION_SIZE; i++) expect(rgba[i * 4 + 3]).toBe(255);
   });
 });
 

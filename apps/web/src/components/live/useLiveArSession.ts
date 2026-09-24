@@ -14,16 +14,22 @@ import {
   SEGMENTATION_INTERVAL_MS_DEFAULT,
 } from "@/lib/live-ar/constants";
 import {
+  applyJewelleryAlphaToOcclusionMask,
   buildFinalVisibilityMaskRgba,
+  buildJewelleryAlphaDebugRgba,
   buildOcclusionDebugRgba,
   buildOcclusionEraseRgba,
+  clipRegionToMask,
+  computeAlphaDownscaleSourceRect,
   computeCategoryDistribution,
   computeHairOverlapReport,
+  computeJewelleryAlphaOcclusionReport,
   computeNecklaceOcclusionMask,
   isMaskStale,
   toMaskSpaceRegion,
   type CategoryDistribution,
   type HairOverlapReport,
+  type JewelleryAlphaOcclusionReport,
 } from "@/lib/live-ar/occlusion";
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
@@ -166,6 +172,10 @@ export interface UseLiveArSessionResult {
      * applied, not a hypothetical one computed against a mask that was rejected as
      * stale. */
     hairOverlap: HairOverlapReport | null;
+    /** 2026-09-24 controlled real-device validation Step 8: the corrected metrics,
+     * scoped to the jewellery's ACTUAL alpha footprint rather than its bounding box --
+     * same null-exactly-when-occlusion-actually-ran condition as `hairOverlap` above. */
+    alphaOcclusionReport: JewelleryAlphaOcclusionReport | null;
   } | null;
   /** M6.4 real-device review Step 2: a small canvas the render loop draws the FINAL
    * jewellery-visibility mask into (white = visible, black = occluded, always fully
@@ -177,6 +187,14 @@ export interface UseLiveArSessionResult {
    * frame; stays at its last content otherwise (harmless -- it's not visible unless
    * the caller chooses to render it, which should itself be gated on the same flag). */
   finalVisibilityMaskCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** 2026-09-24 controlled real-device validation Step 9/10: a small canvas the render
+   * loop draws the green/red/blue/black jewellery-alpha diagnostic into (GREEN =
+   * visible jewellery, RED = hair-over-jewellery, BLUE = clothing-over-jewellery
+   * [above the attachment line], BLACK = no jewellery there at all) -- built from the
+   * EXACT SAME masks the compositor used this frame, never a separate/fake
+   * visualization. Same externally-rendered, standalone-panel convention as
+   * `finalVisibilityMaskCanvasRef` above. */
+  jewelleryAlphaDebugCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** Composites the CURRENT canvas (video + jewellery, already unmirrored -- see
    * coordinates.ts) into a single JPEG blob for the capture flow. Returns null if the
    * canvas isn't ready yet. */
@@ -204,6 +222,10 @@ export function useLiveArSession({
   // below draws into it only once it's actually mounted (null-checked, same as
   // videoRef/canvasRef already are).
   const finalVisibilityMaskCanvasRef = useRef<HTMLCanvasElement>(null);
+  // 2026-09-24 controlled real-device validation Step 9/10 -- same externally-owned
+  // pattern as finalVisibilityMaskCanvasRef above (a standalone picture-in-picture
+  // panel, not composited onto the camera feed).
+  const jewelleryAlphaDebugCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const trackersRef = useRef<LiveTrackers | null>(null);
   // M6.3 -- see the render loop below for why loading/running is unconditional but
@@ -222,6 +244,18 @@ export function useLiveArSession({
   const occlusionScratchCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const occlusionEraseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const occlusionDebugCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // 2026-09-24 controlled real-device validation, Step 2/3: the jewellery's OWN real
+  // alpha, transformed exactly like the visible sprite, so occlusion can be scoped to
+  // "actually a jewellery pixel," not "somewhere inside the bounding box." localRef is
+  // sized to the necklace's own on-screen bounding box (small -- never the full video)
+  // and holds a plain, untransformed-opacity render of the sprite via the SAME
+  // drawJewelleryOverlay used for the real draw (one source of truth for the
+  // transform, per Step 3); regionRef is sized to the SAME clipped mask-space window
+  // computeNecklaceOcclusionMask itself scans, and holds that render downscaled onto
+  // that exact pixel grid, so its alpha channel lines up index-for-index with the
+  // segmentation category data.
+  const jewelleryAlphaLocalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const jewelleryAlphaRegionCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const assetGeometryRef = useRef<{ image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null>(null);
   // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
   // fresh every frame inside the render loop (never restarts it), updated by the
@@ -539,6 +573,7 @@ export function useLiveArSession({
       // this whole block is naturally skipped then, exactly as if occlusion were
       // "disabled" -- there is nothing to occlude.
       let occlusionMs: number | null = null;
+      let alphaMaskMs: number | null = null;
       let occludedNecklaceCanvas: HTMLCanvasElement | null = null;
       if (category === "necklace" && loaded && overlays.length > 0) {
         const necklaceOverlay = overlays[0];
@@ -572,18 +607,132 @@ export function useLiveArSession({
         // `occlusionMask` exists) and the throttled debugInfo dispatch happens AFTER
         // that branch runs, using whatever value it ended up setting.
         let hairOverlap: HairOverlapReport | null = null;
+        let alphaOcclusionReport: JewelleryAlphaOcclusionReport | null = null;
 
         // Step 13: a stale or missing mask falls back to NO occlusion (the necklace
         // draws exactly as it did before M6.4) rather than trusting old data or
         // hiding the necklace outright.
         if (!stale && latestMask && region) {
           const occStart = performance.now();
-          const occlusionMask = computeNecklaceOcclusionMask(
+          const categoryOcclusionMask = computeNecklaceOcclusionMask(
             latestMask.categoryData,
             latestMask.maskWidthPx,
             latestMask.maskHeightPx,
             region
           );
+
+          // 2026-09-24 controlled real-device validation, Step 1-3: the central
+          // correction. Render the jewellery's OWN real alpha through the IDENTICAL
+          // transform used to draw it (drawJewelleryOverlay -- one source of truth,
+          // never a duplicated transform, per Step 3), into a canvas sized to its own
+          // on-screen bounding box (small, never the full video -- Step 13's "only
+          // transform/composite the required region"). Then downscale that directly
+          // onto the exact clipped mask-space grid computeNecklaceOcclusionMask itself
+          // scanned, so the two line up index-for-index without a second coordinate
+          // remapping pass.
+          const alphaStart = performance.now();
+          let occlusionMask = categoryOcclusionMask;
+          const clip = clipRegionToMask(region, latestMask.maskWidthPx, latestMask.maskHeightPx);
+          if (clip.width > 0 && clip.height > 0) {
+            const bboxPx = computeTransformedBoundingBox(necklaceOverlay.transform, loaded.geometry);
+            const bboxWidthPx = Math.max(1, Math.ceil(bboxPx[2] - bboxPx[0]));
+            const bboxHeightPx = Math.max(1, Math.ceil(bboxPx[3] - bboxPx[1]));
+
+            if (!jewelleryAlphaLocalCanvasRef.current) jewelleryAlphaLocalCanvasRef.current = document.createElement("canvas");
+            const localCanvas = jewelleryAlphaLocalCanvasRef.current;
+            if (localCanvas.width !== bboxWidthPx || localCanvas.height !== bboxHeightPx) {
+              localCanvas.width = bboxWidthPx;
+              localCanvas.height = bboxHeightPx;
+            }
+            const localCtx = localCanvas.getContext("2d");
+
+            if (!jewelleryAlphaRegionCanvasRef.current) jewelleryAlphaRegionCanvasRef.current = document.createElement("canvas");
+            const alphaRegionCanvas = jewelleryAlphaRegionCanvasRef.current;
+            if (alphaRegionCanvas.width !== clip.width || alphaRegionCanvas.height !== clip.height) {
+              alphaRegionCanvas.width = clip.width;
+              alphaRegionCanvas.height = clip.height;
+            }
+            const alphaRegionCtx = alphaRegionCanvas.getContext("2d");
+
+            if (localCtx && alphaRegionCtx) {
+              localCtx.clearRect(0, 0, bboxWidthPx, bboxHeightPx);
+              // Shift the anchor so the bbox's own top-left lands at this local
+              // canvas's (0,0) -- the ONLY difference from the real transform, which
+              // otherwise draws identically (same scale/rotation/mirror/source anchor).
+              const localTransform: LiveTransform = {
+                ...necklaceOverlay.transform,
+                anchorPx: {
+                  x: necklaceOverlay.transform.anchorPx.x - bboxPx[0],
+                  y: necklaceOverlay.transform.anchorPx.y - bboxPx[1],
+                },
+              };
+              drawJewelleryOverlay(localCtx, necklaceOverlay.image, localTransform, 1);
+
+              // Downscale (general case, including a bbox partially clipped by the
+              // mask/frame edge): computeAlphaDownscaleSourceRect (occlusion.ts, pure,
+              // directly unit-tested) maps the clipped region's own pixel grid back to
+              // the exact fractional sub-rectangle of the local canvas it corresponds
+              // to -- never a second, ad hoc transform.
+              const { sx, sy, sw, sh } = computeAlphaDownscaleSourceRect(
+                region,
+                clip,
+                videoWidthPx,
+                videoHeightPx,
+                latestMask.maskWidthPx,
+                latestMask.maskHeightPx
+              );
+              alphaRegionCtx.clearRect(0, 0, clip.width, clip.height);
+              alphaRegionCtx.drawImage(localCanvas, sx, sy, sw, sh, 0, 0, clip.width, clip.height);
+
+              const jewelleryAlphaAtRegion = new Uint8ClampedArray(clip.width * clip.height);
+              const { data } = alphaRegionCtx.getImageData(0, 0, clip.width, clip.height);
+              for (let i = 0; i < jewelleryAlphaAtRegion.length; i++) jewelleryAlphaAtRegion[i] = data[i * 4 + 3];
+
+              occlusionMask = applyJewelleryAlphaToOcclusionMask(
+                categoryOcclusionMask,
+                latestMask.maskWidthPx,
+                latestMask.maskHeightPx,
+                region,
+                jewelleryAlphaAtRegion
+              );
+              alphaOcclusionReport = computeJewelleryAlphaOcclusionReport(
+                latestMask.categoryData,
+                occlusionMask,
+                latestMask.maskWidthPx,
+                latestMask.maskHeightPx,
+                region,
+                jewelleryAlphaAtRegion
+              );
+
+              // Debug-only (Step 9): the green/red/blue/black visualization, built
+              // from the SAME categoryData/jewelleryAlphaAtRegion the compositor just
+              // used -- never a separate/fake visualization path.
+              const alphaDebugCanvas = jewelleryAlphaDebugCanvasRef.current;
+              if (showOcclusionDebugRef.current && alphaDebugCanvas) {
+                if (alphaDebugCanvas.width !== latestMask.maskWidthPx || alphaDebugCanvas.height !== latestMask.maskHeightPx) {
+                  alphaDebugCanvas.width = latestMask.maskWidthPx;
+                  alphaDebugCanvas.height = latestMask.maskHeightPx;
+                }
+                const alphaDebugCtx = alphaDebugCanvas.getContext("2d");
+                if (alphaDebugCtx) {
+                  const alphaDebugRgba = buildJewelleryAlphaDebugRgba(
+                    latestMask.categoryData,
+                    latestMask.maskWidthPx,
+                    latestMask.maskHeightPx,
+                    region,
+                    jewelleryAlphaAtRegion
+                  );
+                  alphaDebugCtx.putImageData(
+                    new ImageData(alphaDebugRgba as Uint8ClampedArray<ArrayBuffer>, latestMask.maskWidthPx, latestMask.maskHeightPx),
+                    0,
+                    0
+                  );
+                }
+              }
+            }
+          }
+          alphaMaskMs = performance.now() - alphaStart;
+
           if (distribution) {
             hairOverlap = computeHairOverlapReport(occlusionMask, latestMask.maskWidthPx, latestMask.maskHeightPx, region, distribution);
           }
@@ -681,6 +830,7 @@ export function useLiveArSession({
           trackingStatus: primaryStatus,
           distribution,
           hairOverlap,
+          alphaOcclusionReport,
         };
         if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
           lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
@@ -789,6 +939,7 @@ export function useLiveArSession({
         droppedFrame: totalFrameMs > DROPPED_FRAME_THRESHOLD_MS,
         segmentationMs,
         occlusionMs,
+        alphaMaskMs,
         faceDetectMs,
         poseDetectMs,
       });
@@ -836,6 +987,7 @@ export function useLiveArSession({
     segmentationError,
     occlusionDebugInfo,
     finalVisibilityMaskCanvasRef,
+    jewelleryAlphaDebugCanvasRef,
     captureFrame,
   };
 }

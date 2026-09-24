@@ -12,8 +12,14 @@ beforeAll(() => {
 }, 90000);
 
 import { computeTransformedBoundingBox } from "@/lib/live-ar/geometry";
-import { buildOcclusionEraseRgba, computeNecklaceOcclusionMask, toMaskSpaceRegion } from "@/lib/live-ar/occlusion";
-import { drawOccludedJewelleryOverlay } from "@/lib/live-ar/renderer";
+import {
+  buildOcclusionEraseRgba,
+  clipRegionToMask,
+  computeAlphaDownscaleSourceRect,
+  computeNecklaceOcclusionMask,
+  toMaskSpaceRegion,
+} from "@/lib/live-ar/occlusion";
+import { drawJewelleryOverlay, drawOccludedJewelleryOverlay } from "@/lib/live-ar/renderer";
 import type { JewelleryAssetGeometry, LiveTransform } from "@/lib/live-ar/types";
 
 /**
@@ -364,5 +370,144 @@ describe("transparent jewellery pixels (Step 17)", () => {
     expect(scratchCtx.getImageData(50, 50, 1, 1).data[3]).toBe(0);
     // The solid gold area is now erased too, since this mask occludes everywhere.
     expect(scratchCtx.getImageData(50, 32, 1, 1).data[3]).toBeLessThan(50);
+  });
+});
+
+// 2026-09-24 controlled real-device validation, Step 6/12 (cases 7-10): "alpha remains
+// aligned" under scale, rotation, translation, and all three combined. Reproduces the
+// EXACT production pipeline (useLiveArSession.ts's local-canvas render ->
+// computeAlphaDownscaleSourceRect -> downscale) using real Canvas 2D, with an
+// ASYMMETRIC sprite (opaque only in its own top-left quadrant) so a rotation that
+// doesn't keep the alpha aligned would visibly move the "present" corner to the wrong
+// place -- a symmetric sprite could hide that class of bug.
+describe("jewellery alpha remains aligned under transform (Step 6/12 cases 7-10)", () => {
+  const VIDEO_W = 400;
+  const VIDEO_H = 400;
+  const MASK_SIZE = 40; // square mask, 1 mask px = 10 video px on each axis
+  const SPRITE_SIZE = 80;
+
+  function quadrantSprite() {
+    // Opaque (gold) ONLY in the sprite's own top-left quadrant; transparent elsewhere.
+    const canvas = createCanvas(SPRITE_SIZE, SPRITE_SIZE);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "rgb(212,175,55)";
+    ctx.fillRect(0, 0, SPRITE_SIZE / 2, SPRITE_SIZE / 2);
+    return canvas;
+  }
+
+  const assetGeometry: JewelleryAssetGeometry = {
+    widthPx: SPRITE_SIZE,
+    heightPx: SPRITE_SIZE,
+    alphaBbox: [0, 0, SPRITE_SIZE, SPRITE_SIZE],
+    anchorPx: { x: SPRITE_SIZE / 2, y: SPRITE_SIZE / 2 }, // center anchor -- makes rotation's effect easiest to reason about
+    anchorSource: "default_bbox_top_center",
+    mirrorable: false,
+    physicalWidthMm: null,
+  };
+
+  /** Reproduces useLiveArSession.ts's real alpha-rendering pipeline exactly: render
+   * through the transform into a local (bbox-sized) canvas, then downscale via
+   * computeAlphaDownscaleSourceRect onto the clipped mask-space grid. Returns the
+   * alpha buffer plus the clip window it's aligned to, so callers can index into it
+   * the same way computeNecklaceOcclusionMask itself does. */
+  function renderJewelleryAlphaAtMaskRes(sprite: ReturnType<typeof createCanvas>, transform: LiveTransform) {
+    const bboxPx = computeTransformedBoundingBox(transform, assetGeometry);
+    const bboxWidthPx = Math.max(1, Math.ceil(bboxPx[2] - bboxPx[0]));
+    const bboxHeightPx = Math.max(1, Math.ceil(bboxPx[3] - bboxPx[1]));
+    const region = toMaskSpaceRegion(bboxPx, transform.anchorPx.y, VIDEO_W, VIDEO_H, MASK_SIZE, MASK_SIZE);
+    const clip = clipRegionToMask(region, MASK_SIZE, MASK_SIZE);
+    if (clip.width <= 0 || clip.height <= 0) return { alpha: new Uint8ClampedArray(0), clip };
+
+    const localCanvas = createCanvas(bboxWidthPx, bboxHeightPx);
+    const localCtx = localCanvas.getContext("2d");
+    const localTransform: LiveTransform = {
+      ...transform,
+      anchorPx: { x: transform.anchorPx.x - bboxPx[0], y: transform.anchorPx.y - bboxPx[1] },
+    };
+    drawJewelleryOverlay(localCtx as unknown as CanvasRenderingContext2D, sprite as unknown as CanvasImageSource, localTransform, 1);
+
+    const { sx, sy, sw, sh } = computeAlphaDownscaleSourceRect(region, clip, VIDEO_W, VIDEO_H, MASK_SIZE, MASK_SIZE);
+    const regionCanvas = createCanvas(clip.width, clip.height);
+    const regionCtx = regionCanvas.getContext("2d");
+    regionCtx.drawImage(localCanvas, sx, sy, sw, sh, 0, 0, clip.width, clip.height);
+
+    const { data } = regionCtx.getImageData(0, 0, clip.width, clip.height);
+    const alpha = new Uint8ClampedArray(clip.width * clip.height);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3];
+    return { alpha, clip };
+  }
+
+  /** Samples the alpha buffer at a MASK-SPACE point (relative to the clip window). */
+  function sampleAt(result: { alpha: Uint8ClampedArray; clip: { left: number; top: number; width: number } }, maskX: number, maskY: number) {
+    const localX = maskX - result.clip.left;
+    const localY = maskY - result.clip.top;
+    return result.alpha[localY * result.clip.width + localX] ?? 0;
+  }
+
+  it("case 7 -- SCALE: the opaque quadrant shrinks/grows with scale but stays in the same relative corner", () => {
+    const sprite = quadrantSprite();
+    const transform: LiveTransform = {
+      anchorPx: { x: 200, y: 200 },
+      scaleFactor: 1,
+      rotationDegrees: 0,
+      sourceAnchorPx: assetGeometry.anchorPx,
+      mirrored: false,
+    };
+    const result = renderJewelleryAlphaAtMaskRes(sprite, transform);
+    // Center of the footprint is at mask (20,20). The opaque quadrant is top-left of
+    // the sprite, i.e. up-and-left of center -> mask point (18,18) should be opaque.
+    expect(sampleAt(result, 18, 18)).toBeGreaterThan(200);
+    // The bottom-right quadrant (mask point (22,22)) must remain transparent.
+    expect(sampleAt(result, 22, 22)).toBeLessThan(50);
+  });
+
+  it("case 8 -- ROTATION: a 90deg rotation moves the opaque quadrant to a different corner", () => {
+    const sprite = quadrantSprite();
+    const rotated: LiveTransform = {
+      anchorPx: { x: 200, y: 200 },
+      scaleFactor: 1,
+      rotationDegrees: 90,
+      sourceAnchorPx: assetGeometry.anchorPx,
+      mirrored: false,
+    };
+    const result = renderJewelleryAlphaAtMaskRes(sprite, rotated);
+    // A 90deg clockwise rotation moves "up-left" to "up-right": (18,18) [top-left of
+    // center] must now be transparent, while (22,18) [top-right] must be opaque.
+    expect(sampleAt(result, 18, 18)).toBeLessThan(50);
+    expect(sampleAt(result, 22, 18)).toBeGreaterThan(200);
+  });
+
+  it("case 9 -- TRANSLATION: moving the anchor moves the whole footprint, alpha stays aligned to the new position", () => {
+    const sprite = quadrantSprite();
+    const moved: LiveTransform = {
+      anchorPx: { x: 300, y: 100 }, // moved from (200,200) -> mask (30,10) instead of (20,20)
+      scaleFactor: 1,
+      rotationDegrees: 0,
+      sourceAnchorPx: assetGeometry.anchorPx,
+      mirrored: false,
+    };
+    const result = renderJewelleryAlphaAtMaskRes(sprite, moved);
+    expect(sampleAt(result, 28, 8)).toBeGreaterThan(200); // still up-left of the NEW center
+    expect(sampleAt(result, 32, 12)).toBeLessThan(50); // down-right of the new center -- transparent
+    // The OLD position (20,20) must show nothing now -- the alpha genuinely moved,
+    // not just grew to cover both places.
+    expect(sampleAt(result, 20, 20)).toBeLessThan(50);
+  });
+
+  it("case 10 -- COMBINED scale + rotation + translation: alpha remains aligned", () => {
+    const sprite = quadrantSprite();
+    const combined: LiveTransform = {
+      anchorPx: { x: 250, y: 150 },
+      scaleFactor: 1.5,
+      rotationDegrees: 180,
+      sourceAnchorPx: assetGeometry.anchorPx,
+      mirrored: false,
+    };
+    const result = renderJewelleryAlphaAtMaskRes(sprite, combined);
+    // 180deg rotation flips "up-left" to "down-right" of the (moved) center at mask
+    // (25,15). Scale 1.5 just makes the effect larger/clearer, doesn't change which
+    // corner it's in.
+    expect(sampleAt(result, 27, 17)).toBeGreaterThan(200); // down-right of new center -- opaque
+    expect(sampleAt(result, 23, 13)).toBeLessThan(50); // up-left of new center -- transparent
   });
 });

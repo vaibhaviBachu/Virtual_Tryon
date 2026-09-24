@@ -972,3 +972,188 @@ See the commit immediately following this one in `git log`.
 **Do not read anything above as "M6.4 fixed."** That determination is yours to make from
 step 4 above, on a real device — not from any test or diagnostic number in this
 document.
+
+---
+
+# M6.4 Occlusion-Footprint Correction — Bounding Box vs. Actual Jewellery Alpha (2026-09-24, round 3)
+
+**Status: still unconfirmed on a real device — CODE VERIFIED only, per this round's own
+explicit "do not declare success from unit tests" instruction.** This round fixes a real,
+user-diagnosed root cause (below) with real pixel-level test evidence, but has not been
+re-tested on an actual camera.
+
+## 1. Root cause
+
+The real-camera diagnostic (previous round) reported ~24.7% hair "in the necklace
+region" while hair visually sat mostly *beside* the necklace, not over it. Root cause,
+confirmed by tracing the code (not assumed): `occlusion.ts`'s `region` (from
+`computeTransformedBoundingBox`) is the necklace's rectangular **bounding box** — the
+tightest axis-aligned rectangle containing the sprite's non-transparent pixels. A
+bounding box necessarily also contains transparent area (the empty space around a chain,
+gaps between links, the negative space around a pendant). Hair sitting in that
+transparent-but-in-bounding-box area was being counted as "hair in the necklace region"
+even though no real gold pixel was there. The fix scopes every occlusion decision to the
+jewellery's own real, per-pixel alpha, not its rectangle.
+
+## 2. Current (pre-fix) bounding-box behavior — traced, not assumed
+
+- `asset-cache.ts`'s `computeAlphaBoundingBox` scans the FULL alpha channel once, at
+  load time, but only **keeps the bounding box** (4 numbers) — the per-pixel alpha
+  buffer itself is discarded immediately after (confirmed by reading the function: it
+  returns `[left, top, right, bottom]`, nothing else).
+- `geometry.ts`'s `computeTransformedBoundingBox` transforms that SAME rectangle's 4
+  corners through the live transform and takes their new bounding box — still a
+  rectangle, never the sprite's real silhouette.
+- `occlusion.ts`'s `computeNecklaceOcclusionMask`/`computeCategoryDistribution` (both
+  pre-existing) scan category data within that rectangle. This is exactly "hair
+  somewhere inside the jewellery bounding box," not "hair over a real jewellery pixel"
+  — the bug.
+- The `<img>` element itself (loaded once, cached by `loadJewelleryAssetTexture`) is
+  never discarded — its real pixels are still available to draw from at any time. Fixing
+  this did not require re-fetching or re-decoding anything.
+
+## 3. Actual alpha-mask implementation
+
+`useLiveArSession.ts`'s render loop now renders the jewellery's own alpha into a small
+LOCAL canvas sized to its own on-screen bounding box (never the full video — Step
+12/13's "only transform/composite the required region"), using `renderer.ts`'s existing
+`drawJewelleryOverlay` at full opacity — the exact same draw call used for the real
+sprite, just onto an offscreen buffer whose top-left is shifted to (0,0). Reading that
+canvas's alpha channel gives the sprite's real, transformed, per-pixel silhouette —
+continuous 0-255 values preserved (not force-flattened to binary), with a configurable
+threshold (`DEFAULT_JEWELLERY_ALPHA_THRESHOLD = 10`, matching `asset-cache.ts`'s own
+`alpha > 0` convention, loosened slightly to tolerate anti-aliased edges) applied only at
+the point of deciding "is this a real jewellery pixel."
+
+## 4. Transform path — one source of truth (Step 3/4)
+
+Both the visible jewellery and its alpha silhouette are drawn by the **same**
+`drawJewelleryOverlay` function, given the **same** `LiveTransform` (only the anchor is
+shifted by a constant offset to re-origin it onto the small local canvas — scale,
+rotation, mirroring, and source anchor are identical). There is no second, independently
+maintained transform for the alpha mask that could drift from the real one — confirmed
+directly by the pixel-level "alignment under transform" tests (§10 below), which reuse
+`computeTransformedBoundingBox` from geometry.ts, not a re-derived one.
+
+## 5. Coordinate mapping
+
+New pure function `computeAlphaDownscaleSourceRect` (occlusion.ts) computes exactly
+which fractional sub-rectangle of the local (video-resolution) alpha canvas corresponds
+to the clipped mask-space window `computeNecklaceOcclusionMask` itself scans — a single
+`drawImage` downscale, never a second transform, and correctly handles the case where the
+bounding box is itself partially clipped by the mask/frame edge (verified by a dedicated
+test, not assumed). Also extracted `clipRegionToMask` as ONE shared implementation of the
+floor/ceil/clamp window logic that had been separately duplicated in five different
+functions in this file before this round — a real, verified-behavior-preserving
+refactor, not just new code.
+
+## 6. Hair intersection logic
+
+`applyJewelleryAlphaToOcclusionMask` (new): takes the EXISTING category-rule decision
+(`computeNecklaceOcclusionMask`, unchanged) and ANDs it against the real alpha buffer —
+can only ever REMOVE occlusion the category rule proposed, never add any. Hair occludes
+only where BOTH conditions hold: category=hair AND real jewellery alpha present.
+
+## 7. Clothing intersection logic
+
+Same AND-with-alpha treatment, with the pre-existing attachment-line safety rule fully
+preserved and unchanged (clothing still only occludes at/above the neck attachment
+point) — confirmed by a dedicated test where clothing covers the jewellery both above
+and below the attachment line: only the above-the-line portion occludes, regardless of
+alpha being present on both sides.
+
+## 8. Skin / background / others
+
+Unchanged. Both still tested directly against the alpha-present jewellery footprint
+(not just the bounding box) to confirm they still never occlude even when a real
+jewellery pixel is present there.
+
+## 9. New diagnostics (Step 9/10)
+
+- `computeJewelleryAlphaOcclusionReport`: `jewelleryPixelCount` (the actual footprint,
+  never the bounding box), `hairOverJewelleryPixelCount`/`Pct`,
+  `clothesOverJewelleryPixelCount`/`Pct` (raw, NOT restricted to the attachment rule —
+  a real device can distinguish "no clothing detected" from "clothing detected but
+  correctly not occluding"), `finalVisiblePixelCount`/`Pct`.
+- `formatJewelleryAlphaOcclusionReport`: renders the OLD bounding-box hair% next to the
+  NEW alpha-scoped metrics side by side, specifically so the gap this round fixes stays
+  visible rather than silently replaced.
+- `buildJewelleryAlphaDebugRgba`: the GREEN/RED/BLUE/BLACK visualization, built from the
+  exact `categoryData`/`jewelleryAlphaAtRegion` the compositor used this frame — wired
+  into a new standalone picture-in-picture panel (`jewelleryAlphaDebugCanvasRef`),
+  alongside the existing white/black final-visibility one.
+- All shown in the "Show occlusion debug" panel now.
+
+## 10. Automated tests
+
+37 new tests this round: the full `applyJewelleryAlphaToOcclusionMask` rule-x-alpha
+matrix (hair inside-bbox-but-outside-alpha, exact overlap, partial overlap, full
+overlap, all-transparent, anti-aliased threshold, clothing above/below attachment,
+background/skin never occlude, pure-AND-never-OR), `computeJewelleryAlphaOcclusionReport`
+(correct denominator, the exact real-device scenario, clothing independent of the
+attachment rule), `buildJewelleryAlphaDebugRgba` (all four colors),
+`clipRegionToMask`/`computeAlphaDownscaleSourceRect` (pure coordinate math, including a
+genuine per-axis-scale-mismatch case), and — the one that matters most for Step 12's
+cases 7-10 — **four real Canvas 2D pixel tests in `occlusion-pixel.test.ts`** reproducing
+the exact production alpha-rendering pipeline with an intentionally ASYMMETRIC sprite
+(opaque only in its own top-left quadrant, so a misaligned rotation would visibly move
+the wrong corner) under scale, 90° rotation, translation, and all three combined. All
+four passed, including the rotation case — real evidence the alignment holds, not an
+assumption.
+
+## 11. TypeScript / build
+
+`npx tsc --noEmit`: clean throughout every incremental change this round. `npm run
+build`: succeeds, all 7 routes including `/try-on/live`.
+
+## 12. Performance cost
+
+**Instrumented (`alphaMaskMs`, tracked independently of `occlusionMs`), not yet measured
+on a real device.** Per Step 12/13's "if the alpha mask can be cached... prefer that; do
+not run unnecessary full-resolution work" -- deliberately NOT attempted this round:
+caching would need real evidence it's needed first (this project's own established
+discipline — measure before optimizing), and the render already only touches the
+jewellery's own small on-screen bounding box, never the full video, which is the
+optimization Step 13 asked for explicitly. A cache would also need invalidating on
+essentially every frame anyway, since scale/rotation change continuously with tracking
+— not an obviously free win without a real number to justify the added complexity.
+
+## 13. Full test count
+
+`src/lib/live-ar`: 268 → **275**.
+
+## 14. Lint
+
+Before this round: 71 problems (47 errors, 24 warnings). After: **79 (55 errors, 24
+warnings)** — +8 errors, 0 net new warnings. Checked by hand: the same already-documented
+`react-hooks/refs` collateral pattern from every prior round (new property-chain reads
+in the new debug JSX), not a new category.
+
+## 15. Commit hash
+
+See the commit immediately following this one in `git log`.
+
+## 16. Exact real-device test instructions
+
+1. Open `/try-on/live`, select a necklace, enable **both** "Show segmentation debug" and
+   "Show occlusion debug."
+2. **Test A (control)**: keep hair clearly beside, not over, the necklace. Read the
+   amber "Actual jewellery footprint" line — expect `hair-over-jewellery` near 0%, even
+   if the OLD "bounding box: hair=" number is nonzero (that's the bug this round fixes,
+   now visible side by side).
+3. **Test B (primary acceptance test)**: move a visible lock of hair directly across
+   the gold necklace, hold 2-3 seconds. Expect `hair-over-jewellery` > 0%, and — the
+   thing that actually matters — **look at the real camera output**: do the exact
+   overlapping gold pixels disappear, with hair still visible and the rest of the
+   necklace still visible?
+4. **Test C**: move the hair away — expect the percentage to fall back toward 0% and the
+   jewellery to fully return, with no permanent change.
+5. **Tests D/E**: move your head and body — occlusion should track with the hair, not
+   drift or stay screen-fixed. Also glance at the new GREEN/RED/BLUE/BLACK thumbnail —
+   it should visibly outline the real necklace shape (green), not a rectangle.
+6. Report back: the exact hair-over-jewellery percentages at each step, whether the
+   real camera output visibly changed in step 3, and if it didn't change despite a
+   nonzero percentage, a screenshot of the GREEN/RED/BLUE/BLACK thumbnail at that moment.
+
+**CODE VERIFIED, not REAL DEVICE VERIFIED.** Do not read this section as "M6.4 complete"
+— that determination is still yours to make on an actual camera.

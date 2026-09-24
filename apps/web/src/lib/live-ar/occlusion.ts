@@ -25,6 +25,21 @@
  *   be treating a segmentation misclassification as ground truth, not modeling a real
  *   occlusion case.
  *
+ * REGION vs. ALPHA (2026-09-24 controlled validation's central correction): everything
+ * above decides occlusion against `region` -- the necklace's rectangular BOUNDING BOX
+ * (`computeTransformedBoundingBox`). A real-device test found this alone is too coarse:
+ * a jewellery asset's own alpha channel has large transparent areas INSIDE that
+ * rectangle (the gaps of an open chain, negative space around a pendant, etc.), and
+ * hair sitting in that empty space was being counted as "hair in the necklace region"
+ * even though it never actually touches a visible gold pixel. `computeNecklaceOcclusionMask`
+ * below still decides WHICH CATEGORIES may occlude (unchanged); the NEW
+ * `applyJewelleryAlphaToOcclusionMask` (further down) then ANDs that decision against
+ * the jewellery's own real, transformed alpha, so hair only actually occludes where a
+ * jewellery pixel really is. `region` remains useful on its own (e.g. the original
+ * bounding-box hair percentage) precisely BECAUSE it is coarser -- the two numbers
+ * together (bounding-box % vs. alpha-overlap %) are what expose the gap this section
+ * describes; see `computeJewelleryAlphaOcclusionReport` for both at once.
+ *
  * This module is deliberately Canvas/DOM-free -- every function here operates on plain
  * typed arrays and numbers, so it is fully unit-testable without the real
  * `getContext("2d")`/`ImageData` this project's jsdom test environment does not
@@ -80,6 +95,75 @@ export function toMaskSpaceRegion(
   };
 }
 
+/** The clipped, integer pixel window every occlusion function below scans -- extracted
+ * as ONE shared implementation (2026-09-24 controlled validation's own Step 3 principle
+ * -- "there must be one source of truth" -- applied here too: this exact
+ * floor/ceil/clamp was previously duplicated in five different functions in this file,
+ * a real risk of the copies silently drifting apart). `width`/`height` are the clipped
+ * window's own size in mask pixels -- exactly the dimensions any region-aligned buffer
+ * (e.g. a jewellery alpha buffer) must have to line up with this window. */
+export interface ClippedMaskWindow {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+export function clipRegionToMask(region: OcclusionRegion, maskWidthPx: number, maskHeightPx: number): ClippedMaskWindow {
+  const left = Math.max(0, Math.floor(region.leftPx));
+  const top = Math.max(0, Math.floor(region.topPx));
+  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
+  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  return { left, top, right, bottom, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+/**
+ * 2026-09-24 controlled real-device validation, Step 5/6/12: the coordinate math that
+ * keeps the jewellery's own alpha (rendered into a small LOCAL canvas sized to its
+ * on-screen bounding box -- see useLiveArSession.ts) aligned with the CLIPPED
+ * mask-space region `computeNecklaceOcclusionMask` itself scans, under any
+ * combination of scale/rotation/translation the live transform produces. Pure
+ * coordinate math, no Canvas access -- extracted specifically so this alignment logic
+ * is directly unit-testable (Step 12's "scale/rotation/translation -> alpha remains
+ * aligned" cases), not just exercised implicitly inside the render loop.
+ *
+ * The caller draws the jewellery's alpha into a LOCAL canvas at 1:1 CANVAS/video
+ * resolution (the same resolution the real transform already operates in -- rotation
+ * and scale are applied there, correctly, exactly as the real sprite is drawn). This
+ * function only computes WHICH fractional sub-rectangle of that local canvas
+ * corresponds to the clipped mask-space window, so a single `drawImage` downscale
+ * (never a second transform) produces an alpha buffer whose pixels line up
+ * index-for-index with `categoryData` at the SAME clip window. Handles the case where
+ * `region` was itself clipped (e.g. the bounding box partially exceeds the mask/frame
+ * edge) -- `clip` may be a strict sub-rectangle of the unclipped `region`.
+ */
+export interface AlphaDownscaleSourceRect {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+}
+
+export function computeAlphaDownscaleSourceRect(
+  region: OcclusionRegion,
+  clip: ClippedMaskWindow,
+  videoWidthPx: number,
+  videoHeightPx: number,
+  maskWidthPx: number,
+  maskHeightPx: number
+): AlphaDownscaleSourceRect {
+  const scaleX = maskWidthPx / videoWidthPx;
+  const scaleY = maskHeightPx / videoHeightPx;
+  return {
+    sx: (clip.left - region.leftPx) / scaleX,
+    sy: (clip.top - region.topPx) / scaleY,
+    sw: clip.width / scaleX,
+    sh: clip.height / scaleY,
+  };
+}
+
 /**
  * Pure decision function: given a segmentation category mask and one necklace's
  * rendered region (already in the mask's own coordinate space -- see
@@ -96,10 +180,7 @@ export function computeNecklaceOcclusionMask(
   region: OcclusionRegion
 ): Uint8ClampedArray {
   const occlusion = new Uint8ClampedArray(maskWidthPx * maskHeightPx);
-  const left = Math.max(0, Math.floor(region.leftPx));
-  const top = Math.max(0, Math.floor(region.topPx));
-  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
-  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  const { left, top, right, bottom } = clipRegionToMask(region, maskWidthPx, maskHeightPx);
   for (let y = top; y < bottom; y++) {
     const rowOffset = y * maskWidthPx;
     for (let x = left; x < right; x++) {
@@ -109,6 +190,190 @@ export function computeNecklaceOcclusionMask(
     }
   }
   return occlusion;
+}
+
+// Below this alpha value (out of 255), a pixel is treated as "no real jewellery here" --
+// matches the same low-bar convention `asset-cache.ts`'s own alpha bbox scan uses
+// (`alpha > 0`), loosened slightly to tolerate anti-aliased edge pixels rather than
+// requiring perfect opacity.
+const DEFAULT_JEWELLERY_ALPHA_THRESHOLD = 10;
+
+/**
+ * 2026-09-24 controlled validation, Step 2/4: refines a category-rule occlusion mask
+ * (from `computeNecklaceOcclusionMask` above) against the jewellery's OWN real,
+ * transformed alpha -- "are hair pixels actually located underneath non-transparent
+ * jewellery pixels," not "is there hair somewhere inside the jewellery bounding
+ * rectangle." Can only ever REMOVE occlusion the category rule proposed, never add any
+ * (a pixel with no jewellery there has nothing to occlude, regardless of category) --
+ * this is a boolean AND, not a second, competing decision.
+ *
+ * `jewelleryAlphaAtRegion` must be aligned to the SAME clip window this function (and
+ * `computeNecklaceOcclusionMask`) derives from `region`/`maskWidthPx`/`maskHeightPx` --
+ * i.e. exactly `(right-left) * (bottom-top)` bytes, row-major, starting at
+ * (region.left, region.top). See useLiveArSession.ts for how that buffer is produced
+ * (rendering the jewellery sprite's own alpha through its real transform, then
+ * downscaling to this exact grid) -- this function only consumes it, never renders
+ * anything itself, keeping this file's existing Canvas-free convention.
+ */
+export function applyJewelleryAlphaToOcclusionMask(
+  categoryOcclusionMask: Uint8ClampedArray,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  region: OcclusionRegion,
+  jewelleryAlphaAtRegion: Uint8ClampedArray,
+  alphaThresholdOutOf255: number = DEFAULT_JEWELLERY_ALPHA_THRESHOLD
+): Uint8ClampedArray {
+  const { left, top, right, bottom, width: regionWidth } = clipRegionToMask(region, maskWidthPx, maskHeightPx);
+  if (regionWidth <= 0 || bottom <= top) return categoryOcclusionMask;
+
+  const refined = new Uint8ClampedArray(categoryOcclusionMask);
+  for (let y = top; y < bottom; y++) {
+    const maskRowOffset = y * maskWidthPx;
+    const alphaRowOffset = (y - top) * regionWidth;
+    for (let x = left; x < right; x++) {
+      const maskIdx = maskRowOffset + x;
+      if (refined[maskIdx] === 0) continue; // category rule already says non-occluding
+      const alpha = jewelleryAlphaAtRegion[alphaRowOffset + (x - left)] ?? 0;
+      if (alpha < alphaThresholdOutOf255) refined[maskIdx] = 0; // no real jewellery pixel here
+    }
+  }
+  return refined;
+}
+
+/** 2026-09-24 controlled validation, Step 8: the two clearly-separated metrics the
+ * bounding-box-only percentage conflated -- "Actual jewellery pixels" as the
+ * denominator, never the bounding box, per that step's explicit instruction. Computed
+ * in one pass since `refinedOcclusionMask` (from `applyJewelleryAlphaToOcclusionMask`)
+ * and `jewelleryAlphaAtRegion` are already both available by the time this runs. */
+export interface JewelleryAlphaOcclusionReport {
+  jewelleryPixelCount: number;
+  hairOverJewelleryPixelCount: number;
+  hairOverJewelleryPct: number;
+  /** 2026-09-24, round 2: raw clothes-over-jewellery overlap -- ALL clothing pixels
+   * over real jewellery alpha, regardless of the attachment-line rule (that rule still
+   * governs what actually occludes, in `applyJewelleryAlphaToOcclusionMask`; this is a
+   * diagnostic, so it deliberately does NOT apply that restriction, precisely so a
+   * real device can distinguish "no clothing detected there at all" from "clothing IS
+   * there, but correctly not occluding below the attachment line"). */
+  clothesOverJewelleryPixelCount: number;
+  clothesOverJewelleryPct: number;
+  finalVisiblePixelCount: number;
+  finalVisibilityPct: number;
+}
+
+const EMPTY_ALPHA_OCCLUSION_REPORT: JewelleryAlphaOcclusionReport = {
+  jewelleryPixelCount: 0,
+  hairOverJewelleryPixelCount: 0,
+  hairOverJewelleryPct: 0,
+  clothesOverJewelleryPixelCount: 0,
+  clothesOverJewelleryPct: 0,
+  finalVisiblePixelCount: 0,
+  finalVisibilityPct: 100,
+};
+
+export function computeJewelleryAlphaOcclusionReport(
+  categoryData: Uint8Array,
+  refinedOcclusionMask: Uint8ClampedArray,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  region: OcclusionRegion,
+  jewelleryAlphaAtRegion: Uint8ClampedArray,
+  alphaThresholdOutOf255: number = DEFAULT_JEWELLERY_ALPHA_THRESHOLD
+): JewelleryAlphaOcclusionReport {
+  const { left, top, right, bottom, width: regionWidth } = clipRegionToMask(region, maskWidthPx, maskHeightPx);
+  if (regionWidth <= 0 || bottom <= top) return EMPTY_ALPHA_OCCLUSION_REPORT;
+
+  let jewelleryPixelCount = 0;
+  let hairOverJewelleryPixelCount = 0;
+  let clothesOverJewelleryPixelCount = 0;
+  let finalVisiblePixelCount = 0;
+  for (let y = top; y < bottom; y++) {
+    const maskRowOffset = y * maskWidthPx;
+    const alphaRowOffset = (y - top) * regionWidth;
+    for (let x = left; x < right; x++) {
+      const alpha = jewelleryAlphaAtRegion[alphaRowOffset + (x - left)] ?? 0;
+      if (alpha < alphaThresholdOutOf255) continue; // no real jewellery pixel here
+      jewelleryPixelCount++;
+      const maskIdx = maskRowOffset + x;
+      const category = categoryData[maskIdx];
+      if (category === HAIR_CATEGORY) hairOverJewelleryPixelCount++;
+      if (category === CLOTHES_CATEGORY) clothesOverJewelleryPixelCount++;
+      if (refinedOcclusionMask[maskIdx] === 0) finalVisiblePixelCount++;
+    }
+  }
+  if (jewelleryPixelCount === 0) return EMPTY_ALPHA_OCCLUSION_REPORT;
+  return {
+    jewelleryPixelCount,
+    hairOverJewelleryPixelCount,
+    hairOverJewelleryPct: (hairOverJewelleryPixelCount / jewelleryPixelCount) * 100,
+    clothesOverJewelleryPixelCount,
+    clothesOverJewelleryPct: (clothesOverJewelleryPixelCount / jewelleryPixelCount) * 100,
+    finalVisiblePixelCount,
+    finalVisibilityPct: (finalVisiblePixelCount / jewelleryPixelCount) * 100,
+  };
+}
+
+/** Plain-text rendering matching Step 8's exact requested format, distinguishing the
+ * OLD bounding-box metric from the NEW alpha-scoped ones side by side, specifically so
+ * the gap between them (the whole point of this correction) stays visible rather than
+ * silently replaced. */
+export function formatJewelleryAlphaOcclusionReport(
+  boundingBoxHairPct: number,
+  r: JewelleryAlphaOcclusionReport
+): string {
+  if (r.jewelleryPixelCount === 0) {
+    return `Necklace bounding box: hair=${boundingBoxHairPct.toFixed(1)}% / Actual jewellery footprint: 0 pixels (region empty/off-mask)`;
+  }
+  return (
+    `Necklace bounding box: hair=${boundingBoxHairPct.toFixed(1)}% / ` +
+    `Actual jewellery footprint (${r.jewelleryPixelCount}px): ` +
+    `hair-over-jewellery=${r.hairOverJewelleryPct.toFixed(1)}% (${r.hairOverJewelleryPixelCount}px), ` +
+    `clothes-over-jewellery=${r.clothesOverJewelleryPct.toFixed(1)}% (${r.clothesOverJewelleryPixelCount}px) / ` +
+    `Final jewellery visible px=${r.finalVisiblePixelCount} (${r.finalVisibilityPct.toFixed(1)}%)`
+  );
+}
+
+/** 2026-09-24 controlled validation, Step 9: "GREEN = actual jewellery alpha, RED =
+ * hair-over-jewellery, BLUE = clothing-over-jewellery, BLACK = transparent / no
+ * jewellery." Built from the SAME `categoryData`/`jewelleryAlphaAtRegion` the compositor
+ * actually used this frame -- never a separate/fake visualization path, per that step's
+ * explicit instruction. Always fully opaque (a standalone diagnostic panel, matching
+ * `buildFinalVisibilityMaskRgba`'s convention), full mask size so it can reuse the same
+ * scaled-blit draw every other debug overlay in this codebase already uses. */
+export function buildJewelleryAlphaDebugRgba(
+  categoryData: Uint8Array,
+  maskWidthPx: number,
+  maskHeightPx: number,
+  region: OcclusionRegion,
+  jewelleryAlphaAtRegion: Uint8ClampedArray,
+  alphaThresholdOutOf255: number = DEFAULT_JEWELLERY_ALPHA_THRESHOLD
+): Uint8ClampedArray {
+  const rgba = new Uint8ClampedArray(maskWidthPx * maskHeightPx * 4);
+  // Every pixel starts BLACK, fully opaque (rgba initializes to 0 -- alpha needs setting).
+  for (let i = 0; i < maskWidthPx * maskHeightPx; i++) rgba[i * 4 + 3] = 255;
+
+  const { left, top, right, bottom, width: regionWidth } = clipRegionToMask(region, maskWidthPx, maskHeightPx);
+  if (regionWidth <= 0 || bottom <= top) return rgba;
+
+  for (let y = top; y < bottom; y++) {
+    const maskRowOffset = y * maskWidthPx;
+    const alphaRowOffset = (y - top) * regionWidth;
+    for (let x = left; x < right; x++) {
+      const alpha = jewelleryAlphaAtRegion[alphaRowOffset + (x - left)] ?? 0;
+      if (alpha < alphaThresholdOutOf255) continue; // stays black -- no jewellery here
+      const maskIdx = maskRowOffset + x;
+      const category = categoryData[maskIdx];
+      const offset = maskIdx * 4;
+      if (category === HAIR_CATEGORY) {
+        rgba[offset] = 255; // RED -- hair over jewellery
+      } else if (category === CLOTHES_CATEGORY && y <= region.attachmentYPx) {
+        rgba[offset + 2] = 255; // BLUE -- clothing over jewellery (where it's allowed to occlude)
+      } else {
+        rgba[offset + 1] = 255; // GREEN -- actual jewellery, visible
+      }
+    }
+  }
+  return rgba;
 }
 
 /** Whether a mask of the given age should still be trusted for occlusion (Step 13).
@@ -205,10 +470,7 @@ export function computeCategoryDistribution(
   maskHeightPx: number,
   region: OcclusionRegion
 ): CategoryDistribution {
-  const left = Math.max(0, Math.floor(region.leftPx));
-  const top = Math.max(0, Math.floor(region.topPx));
-  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
-  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  const { left, top, right, bottom } = clipRegionToMask(region, maskWidthPx, maskHeightPx);
   if (right <= left || bottom <= top) return EMPTY_DISTRIBUTION;
 
   const counts = [0, 0, 0, 0, 0, 0];
@@ -280,10 +542,7 @@ export function computeHairOverlapReport(
   region: OcclusionRegion,
   distribution: CategoryDistribution
 ): HairOverlapReport {
-  const left = Math.max(0, Math.floor(region.leftPx));
-  const top = Math.max(0, Math.floor(region.topPx));
-  const right = Math.min(maskWidthPx, Math.ceil(region.rightPx));
-  const bottom = Math.min(maskHeightPx, Math.ceil(region.bottomPx));
+  const { left, top, right, bottom } = clipRegionToMask(region, maskWidthPx, maskHeightPx);
   if (right <= left || bottom <= top) return { hairNecklaceOverlap: false, hairPct: 0, finalVisiblePct: 100 };
 
   let occludedCount = 0;

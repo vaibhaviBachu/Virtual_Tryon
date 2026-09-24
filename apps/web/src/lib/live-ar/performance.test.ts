@@ -22,6 +22,7 @@ describe("PerformanceTracker", () => {
       occlusion: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
       faceDetect: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
       poseDetect: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
+      alphaMask: { sampleCount: 0, avgMs: 0, medianMs: 0, p95Ms: 0, minMs: 0, maxMs: 0 },
     });
   });
 
@@ -124,6 +125,24 @@ describe("PerformanceTracker", () => {
       const snapshot = tracker.snapshot();
       expect(snapshot.faceDetect.avgMs).toBeCloseTo(70, 6);
       expect(snapshot.poseDetect.avgMs).toBeCloseTo(35, 6);
+    });
+  });
+
+  // 2026-09-24 controlled real-device validation Step 13: measure the cost of the new
+  // jewellery-alpha rendering/downscaling step, separately from occlusionMs.
+  describe("jewellery alpha mask timing (controlled real-device validation)", () => {
+    it("reports all-zero when no frame ever carried alphaMaskMs", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ occlusionMs: 2 }));
+      expect(tracker.snapshot().alphaMask.sampleCount).toBe(0);
+    });
+
+    it("tracks alpha-mask timing independently of occlusion compositing timing", () => {
+      const tracker = new PerformanceTracker();
+      tracker.record(sample({ alphaMaskMs: 1.5, occlusionMs: 2.5 }));
+      const snapshot = tracker.snapshot();
+      expect(snapshot.alphaMask.avgMs).toBeCloseTo(1.5, 6);
+      expect(snapshot.occlusion.avgMs).toBeCloseTo(2.5, 6);
     });
   });
 });

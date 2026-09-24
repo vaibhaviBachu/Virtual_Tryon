@@ -35,6 +35,13 @@ export interface FrameSample {
    * overlay this frame, no fresh-enough mask, etc.) -- same "exclude, don't count as
    * 0ms" convention as `segmentationMs` above. */
   occlusionMs?: number | null;
+  /** 2026-09-24 controlled real-device validation Step 13: the cost of rendering the
+   * jewellery's own alpha silhouette + downscaling it to mask resolution (the new
+   * per-frame work this correction adds) -- measured separately from `occlusionMs`
+   * (which is category-mask + erase compositing) so the two costs are never conflated,
+   * per that step's explicit "measure the cost... do not introduce an expensive
+   * operation without measuring it." Same exclude-don't-zero convention as the others. */
+  alphaMaskMs?: number | null;
 }
 
 /** Real min/median/average/p95/max over a set of real recorded timings -- Step 10's
@@ -71,6 +78,8 @@ export interface PerformanceSnapshot {
    * combined `avgTrackingMs`/frame-total figure above. */
   faceDetect: TimingStats;
   poseDetect: TimingStats;
+  /** 2026-09-24 controlled real-device validation Step 13: see FrameSample.alphaMaskMs. */
+  alphaMask: TimingStats;
 }
 
 const EMPTY_SNAPSHOT: PerformanceSnapshot = {
@@ -86,6 +95,7 @@ const EMPTY_SNAPSHOT: PerformanceSnapshot = {
   occlusion: EMPTY_TIMING_STATS,
   faceDetect: EMPTY_TIMING_STATS,
   poseDetect: EMPTY_TIMING_STATS,
+  alphaMask: EMPTY_TIMING_STATS,
 };
 
 function average(values: number[]): number {
@@ -157,6 +167,9 @@ export class PerformanceTracker {
     const poseDetectTimes = this.samples
       .map((s) => s.poseDetectMs)
       .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+    const alphaMaskTimes = this.samples
+      .map((s) => s.alphaMaskMs)
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
     return {
       fps: avgFrameMs > 0 ? 1000 / avgFrameMs : 0,
       avgFrameMs,
@@ -170,6 +183,7 @@ export class PerformanceTracker {
       occlusion: computeTimingStats(occlusionTimes),
       faceDetect: computeTimingStats(faceDetectTimes),
       poseDetect: computeTimingStats(poseDetectTimes),
+      alphaMask: computeTimingStats(alphaMaskTimes),
     };
   }
 

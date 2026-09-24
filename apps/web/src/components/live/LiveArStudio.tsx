@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
 import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
-import { formatCategoryDistribution, formatHairOverlapReport } from "@/lib/live-ar/occlusion";
+import { formatCategoryDistribution, formatHairOverlapReport, formatJewelleryAlphaOcclusionReport } from "@/lib/live-ar/occlusion";
 import { NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH } from "@/lib/live-ar/constants";
 import {
   clearSavedNeckFractionOverride,
@@ -330,6 +330,17 @@ export function LiveArStudio() {
                 {session.occlusionDebugInfo?.hairOverlap && (
                   <div className="font-bold">{formatHairOverlapReport(session.occlusionDebugInfo.hairOverlap)}</div>
                 )}
+                {/* 2026-09-24, round 2 -- the corrected metrics: bounding-box hair%
+                    (the OLD, misleading number) shown side by side with hair/clothes
+                    overlap against the jewellery's ACTUAL alpha footprint (the fix). */}
+                {session.occlusionDebugInfo?.distribution && session.occlusionDebugInfo?.alphaOcclusionReport && (
+                  <div className="font-bold text-amber-300">
+                    {formatJewelleryAlphaOcclusionReport(
+                      session.occlusionDebugInfo.distribution.hairPct,
+                      session.occlusionDebugInfo.alphaOcclusionReport
+                    )}
+                  </div>
+                )}
                 {maskCapturedAtMs !== null && (
                   <div>Segmentation timestamp: {maskCapturedAtMs.toFixed(0)}ms (session-relative)</div>
                 )}
@@ -347,6 +358,23 @@ export function LiveArStudio() {
                 </span>
                 <canvas
                   ref={session.finalVisibilityMaskCanvasRef}
+                  className="h-24 w-24 rounded border border-white/40 bg-black/40 [image-rendering:pixelated]"
+                />
+              </div>
+            )}
+
+            {/* 2026-09-24 controlled real-device validation Step 9/10: standalone
+                green/red/blue/black jewellery-alpha diagnostic -- GREEN=jewellery
+                visible, RED=hair-over-jewellery, BLUE=clothing-over-jewellery (above
+                the attachment line), BLACK=no jewellery there. Built from the exact
+                masks the compositor used, never a separate/fake visualization. */}
+            {showOcclusionDebug && (
+              <div className="absolute right-3 top-32 flex flex-col items-end gap-1">
+                <span className="rounded bg-black/70 px-1.5 py-0.5 text-[9px] text-white">
+                  Jewellery alpha (green=visible, red=hair, blue=clothes, black=none)
+                </span>
+                <canvas
+                  ref={session.jewelleryAlphaDebugCanvasRef}
                   className="h-24 w-24 rounded border border-white/40 bg-black/40 [image-rendering:pixelated]"
                 />
               </div>
