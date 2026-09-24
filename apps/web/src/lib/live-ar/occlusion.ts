@@ -333,15 +333,28 @@ export function formatJewelleryAlphaOcclusionReport(
   );
 }
 
-/** 2026-09-24 controlled validation, Step 9: "GREEN = actual jewellery alpha, RED =
- * hair-over-jewellery, BLUE = clothing-over-jewellery, BLACK = transparent / no
- * jewellery." Built from the SAME `categoryData`/`jewelleryAlphaAtRegion` the compositor
- * actually used this frame -- never a separate/fake visualization path, per that step's
- * explicit instruction. Always fully opaque (a standalone diagnostic panel, matching
- * `buildFinalVisibilityMaskRgba`'s convention), full mask size so it can reuse the same
- * scaled-blit draw every other debug overlay in this codebase already uses. */
+/** 2026-09-24 controlled validation, Step 9/10: "GREEN = visible jewellery pixels, RED
+ * = hair occlusion, BLUE = clothing occlusion, BLACK = transparent/non-jewellery."
+ *
+ * Takes `refinedOcclusionMask` -- the SAME final decision
+ * `applyJewelleryAlphaToOcclusionMask` produced and the real compositor actually
+ * applied -- as a DIRECT input, rather than re-deriving the attachment-line rule
+ * independently from `region`/`categoryData` a second time. An earlier version of this
+ * function did re-derive that rule inline; while numerically equivalent (both read the
+ * exact same documented rule), that duplication was a real, if latent, risk that this
+ * visualization could silently drift from the actual compositor decision if the rule
+ * ever changed in one place and not the other. Taking the real mask directly removes
+ * that risk by construction, not by the two copies happening to agree today -- the
+ * 2026-09-24 real-device verification request's own "verify... do not create a
+ * separate approximate debug algorithm" instruction, applied literally rather than
+ * just satisfied by coincidence. `categoryData` is still used, but only to LABEL which
+ * category caused an already-decided occlusion (RED vs. BLUE), never to decide
+ * whether occlusion happened. Always fully opaque (a standalone diagnostic panel,
+ * matching `buildFinalVisibilityMaskRgba`'s convention), full mask size so it can reuse
+ * the same scaled-blit draw every other debug overlay in this codebase already uses. */
 export function buildJewelleryAlphaDebugRgba(
   categoryData: Uint8Array,
+  refinedOcclusionMask: Uint8ClampedArray,
   maskWidthPx: number,
   maskHeightPx: number,
   region: OcclusionRegion,
@@ -362,14 +375,17 @@ export function buildJewelleryAlphaDebugRgba(
       const alpha = jewelleryAlphaAtRegion[alphaRowOffset + (x - left)] ?? 0;
       if (alpha < alphaThresholdOutOf255) continue; // stays black -- no jewellery here
       const maskIdx = maskRowOffset + x;
-      const category = categoryData[maskIdx];
       const offset = maskIdx * 4;
-      if (category === HAIR_CATEGORY) {
-        rgba[offset] = 255; // RED -- hair over jewellery
-      } else if (category === CLOTHES_CATEGORY && y <= region.attachmentYPx) {
-        rgba[offset + 2] = 255; // BLUE -- clothing over jewellery (where it's allowed to occlude)
+      if (refinedOcclusionMask[maskIdx] === 0) {
+        rgba[offset + 1] = 255; // GREEN -- real jewellery pixel, not occluded -> visible
+        continue;
+      }
+      // Occluded (per the REAL mask, not re-derived) -- categoryData only labels WHICH
+      // category caused it, never re-decides whether it did.
+      if (categoryData[maskIdx] === HAIR_CATEGORY) {
+        rgba[offset] = 255; // RED -- hair occlusion
       } else {
-        rgba[offset + 1] = 255; // GREEN -- actual jewellery, visible
+        rgba[offset + 2] = 255; // BLUE -- clothing occlusion (the only other category that can occlude)
       }
     }
   }

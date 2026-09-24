@@ -668,7 +668,9 @@ describe("buildJewelleryAlphaDebugRgba (Step 9)", () => {
   it("is black wherever jewellery alpha is absent, regardless of category", () => {
     const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE); // all transparent
     const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
-    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    // Occluded everywhere: proves alpha-absence overrides occlusion state, not just coincides with it.
+    const refinedOcclusionMask = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, refinedOcclusionMask, REGION_SIZE, REGION_SIZE, region, alpha);
     for (let i = 0; i < REGION_SIZE * REGION_SIZE; i++) {
       expect([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3]]).toEqual([0, 0, 0, 255]);
     }
@@ -677,21 +679,28 @@ describe("buildJewelleryAlphaDebugRgba (Step 9)", () => {
   it("is green where jewellery alpha is present and nothing occludes", () => {
     const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
     const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
-    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    const refinedOcclusionMask = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE); // 0 = visible everywhere
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, refinedOcclusionMask, REGION_SIZE, REGION_SIZE, region, alpha);
     expect([rgba[0], rgba[1], rgba[2], rgba[3]]).toEqual([0, 255, 0, 255]);
   });
 
   it("is red where hair overlaps real jewellery alpha", () => {
     const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
     const categoryData = uniformCategoryMask(HAIR, REGION_SIZE, REGION_SIZE);
-    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    const refinedOcclusionMask = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255); // occluded everywhere
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, refinedOcclusionMask, REGION_SIZE, REGION_SIZE, region, alpha);
     expect([rgba[0], rgba[1], rgba[2], rgba[3]]).toEqual([255, 0, 0, 255]);
   });
 
   it("is blue where clothing overlaps real jewellery alpha at/above the attachment point", () => {
     const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
     const categoryData = uniformCategoryMask(CLOTHES, REGION_SIZE, REGION_SIZE);
-    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    // Mirrors the real attachment-line rule: rows <= attachmentYPx(2) occluded, rows below it visible.
+    const refinedOcclusionMask = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    for (let y = 0; y <= region.attachmentYPx; y++) {
+      for (let x = 0; x < REGION_SIZE; x++) refinedOcclusionMask[y * REGION_SIZE + x] = 255;
+    }
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, refinedOcclusionMask, REGION_SIZE, REGION_SIZE, region, alpha);
     // row 0 is <= attachmentYPx(2) -> blue.
     expect([rgba[0], rgba[1], rgba[2], rgba[3]]).toEqual([0, 0, 255, 255]);
     // row 3 is > attachmentYPx(2) -> clothing doesn't occlude there -> reads as visible jewellery (green).
@@ -702,7 +711,8 @@ describe("buildJewelleryAlphaDebugRgba (Step 9)", () => {
   it("is always fully opaque and exactly maskWidthPx*maskHeightPx*4 bytes", () => {
     const alpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
     const categoryData = uniformCategoryMask(BACKGROUND, REGION_SIZE, REGION_SIZE);
-    const rgba = buildJewelleryAlphaDebugRgba(categoryData, REGION_SIZE, REGION_SIZE, region, alpha);
+    const refinedOcclusionMask = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE);
+    const rgba = buildJewelleryAlphaDebugRgba(categoryData, refinedOcclusionMask, REGION_SIZE, REGION_SIZE, region, alpha);
     expect(rgba.length).toBe(REGION_SIZE * REGION_SIZE * 4);
     for (let i = 0; i < REGION_SIZE * REGION_SIZE; i++) expect(rgba[i * 4 + 3]).toBe(255);
   });

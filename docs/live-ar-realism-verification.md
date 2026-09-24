@@ -1157,3 +1157,43 @@ See the commit immediately following this one in `git log`.
 
 **CODE VERIFIED, not REAL DEVICE VERIFIED.** Do not read this section as "M6.4 complete"
 — that determination is still yours to make on an actual camera.
+
+## 17. M6.4 real-device verification prep (2026-09-24, Step 1/2 of the audit request)
+
+**Step 1 — runtime path traced from `b4b0ec2`, confirmed from code (not assumed):**
+see the chat report delivered alongside this commit for the full stage-by-stage trace
+(camera → tracking → segmentation → geometry/transform → visible render → jewellery
+alpha footprint → mask mapping → occlusion decision → isolated buffer →
+`destination-out` → final composite), each stage naming its exact file/function.
+
+**Step 2 — debug UI audit against the required checklist (A-I):** items A-H were
+already exposed via `formatJewelleryAlphaOcclusionReport` (A/B/C/D/E, amber line),
+`formatOcclusionDebugText` (F/H, mask age + tracking), and the `maskCapturedAtMs` line
+(G). **Item I ("whether occlusion is currently active") was genuinely absent** —
+confirmed by grep, zero matches for any active/inactive flag anywhere in the render
+loop or UI. Fixed this round:
+
+- Added `occlusionActive: boolean` to `UseLiveArSessionResult["occlusionDebugInfo"]`
+  (`useLiveArSession.ts`), set to `occludedNecklaceCanvas !== null` — the literal
+  question of whether the erase/compositing path actually ran this frame, read off the
+  same gate the render loop itself uses, never inferred separately by the UI.
+- `formatOcclusionDebugText` now leads with an explicit `ACTIVE`/`INACTIVE` word as the
+  first thing on the occlusion debug panel's first line, rather than requiring the
+  reader to infer activity from the mask-age/staleness text.
+
+**Also found and fixed while auditing Step 4's "verify the debug image is generated
+from the EXACT masks the compositor used" requirement:** `buildJewelleryAlphaDebugRgba`
+was independently re-deriving the attachment-line occlusion rule instead of consuming
+the real `occlusionMask` the compositor actually applied — a latent drift risk, not a
+currently-observable bug. Refactored to take the real `refinedOcclusionMask` as a
+direct parameter; the one production call site and all 5 test call sites in
+`occlusion.test.ts` were updated to match.
+
+These are consistency/completeness fixes made *while* inspecting the code per Step 1's
+instruction, not new functionality and not a claim that M6.4 works on a real camera.
+`npx tsc --noEmit`, `npx vitest run src/lib/live-ar` (275/275 passing, up from 275 — no
+count change, only signature/argument fixes), lint (no new problems beyond the
+already-documented `react-hooks/refs` collateral, verified by diffing against the
+`b4b0ec2` baseline), and `npm run build` all pass. **Still CODE VERIFIED only.** Steps
+3-9 (the real-camera tests) and Step 10 (the final report) are the user's to perform —
+not started, not predicted here.

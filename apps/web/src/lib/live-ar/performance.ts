@@ -217,17 +217,21 @@ export function formatSegmentationDebugText(
  * `TrackingStatus` here) to keep this file's existing zero-dependency,
  * framework-agnostic status (see this file's header docstring). */
 export function formatOcclusionDebugText(
-  info: { maskAgeMs: number | null; isStale: boolean; trackingStatus: string } | null,
+  info: { maskAgeMs: number | null; isStale: boolean; trackingStatus: string; occlusionActive: boolean } | null,
   stats: TimingStats
 ): string {
-  if (info === null) return "Occlusion: n/a (no necklace overlay this frame)";
+  // M6.4 real-device verification (2026-09-24) Step 2 item I: "whether occlusion is
+  // currently active" must be its own explicit, unmissable word (ACTIVE/INACTIVE), not
+  // something the reader has to infer from the mask-age/staleness text alone.
+  if (info === null) return "Occlusion: INACTIVE (no necklace overlay this frame)";
   const ageText =
-    info.maskAgeMs === null ? "no mask yet" : `${info.maskAgeMs.toFixed(0)}ms old${info.isStale ? " (STALE -- occlusion disabled)" : ""}`;
+    info.maskAgeMs === null ? "no mask yet" : `${info.maskAgeMs.toFixed(0)}ms old${info.isStale ? " (STALE)" : ""}`;
   const timingText =
     stats.sampleCount > 0
       ? ` / compositing: n=${stats.sampleCount} avg=${stats.avgMs.toFixed(2)}ms p95=${stats.p95Ms.toFixed(2)}ms`
       : " / compositing: no samples yet";
-  return `Occlusion: tracking=${info.trackingStatus} mask age=${ageText}${timingText}`;
+  const activeText = info.occlusionActive ? "ACTIVE" : "INACTIVE";
+  return `Occlusion: ${activeText} / tracking=${info.trackingStatus} mask age=${ageText}${timingText}`;
 }
 
 /** Formats a snapshot the way spec §23's example overlay does:

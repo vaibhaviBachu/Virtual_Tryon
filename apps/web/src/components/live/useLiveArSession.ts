@@ -176,6 +176,13 @@ export interface UseLiveArSessionResult {
      * scoped to the jewellery's ACTUAL alpha footprint rather than its bounding box --
      * same null-exactly-when-occlusion-actually-ran condition as `hairOverlap` above. */
     alphaOcclusionReport: JewelleryAlphaOcclusionReport | null;
+    /** M6.4 real-device verification (2026-09-24) Step 2 item I: the literal answer to
+     * "is occlusion actually being applied to the necklace on THIS frame" -- true only
+     * when the mask was fresh enough and the erase/compositing path actually ran (i.e.
+     * `occludedNecklaceCanvas` was produced), false whenever the necklace is drawn
+     * un-occluded for any reason (stale/missing mask, no overlay). Never inferred by
+     * the UI from other fields -- read directly off the same gate the render loop uses. */
+    occlusionActive: boolean;
   } | null;
   /** M6.4 real-device review Step 2: a small canvas the render loop draws the FINAL
    * jewellery-visibility mask into (white = visible, black = occluded, always fully
@@ -717,6 +724,7 @@ export function useLiveArSession({
                 if (alphaDebugCtx) {
                   const alphaDebugRgba = buildJewelleryAlphaDebugRgba(
                     latestMask.categoryData,
+                    occlusionMask,
                     latestMask.maskWidthPx,
                     latestMask.maskHeightPx,
                     region,
@@ -831,6 +839,7 @@ export function useLiveArSession({
           distribution,
           hairOverlap,
           alphaOcclusionReport,
+          occlusionActive: occludedNecklaceCanvas !== null,
         };
         if (frameStartMs - lastOcclusionDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
           lastOcclusionDebugStateUpdateAtMsRef.current = frameStartMs;
