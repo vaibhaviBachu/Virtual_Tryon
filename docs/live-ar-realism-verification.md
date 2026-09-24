@@ -1472,3 +1472,25 @@ Depends entirely on Step 13's real-device result (below):
 
 **CODE VERIFIED, not REAL DEVICE VERIFIED.** Do not read this section as "M6.6
 complete" — per the request's own instruction: **STOP here — do not begin M6.7.**
+
+## 20. M6.7 — jewellery representation upgrade / 3D-ready Live AR
+
+Full Steps 0-11 audit, option comparison, and architecture design in
+[`docs/live-ar-3d-representation-assessment.md`](live-ar-3d-representation-assessment.md)
+— kept as its own document (like M6.1's architecture audit) rather than appended here,
+since it's a forward-looking technical assessment, not a per-frame verification log.
+
+**Summary**: a flat PNG cannot represent genuinely new viewing angles/depth/thickness
+under head rotation, no matter how sophisticated the 2D deformation math gets — 2D
+warping can only rearrange pixels that already exist, never synthesize a side view
+that was never photographed. That is the real, precise reason M6.6 still looks like an
+overlay under rotation. Implemented: `jewellery-representation.ts` (the Step 4
+representation contract — `flat-2d`/`layered-2.5d`/`gltf-3d`, always resolving to
+`flat-2d` today, 8 tests), deliberately NOT wired into the render loop (no consumer
+exists yet). **Stopped at Step 11 per its own explicit instruction**: no `.glb`/`.gltf`
+asset, and no Three.js/Babylon.js/WebGL dependency, exists anywhere in this
+repository (confirmed by direct search, not assumed) — a real 3D asset is required
+before Steps 12-14 (POC real-device test, before/after comparison, 3D performance)
+can be performed; none was fabricated. `src/lib/live-ar`: 342 → **350** (+8). Full web
+suite: **391/391**. `tsc`/lint/build all clean (zero new lint findings — this round
+touched no component/JSX files at all). **STOP — do not begin M6.8.**
