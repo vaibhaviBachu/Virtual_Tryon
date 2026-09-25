@@ -240,6 +240,33 @@ export function applyJewelleryAlphaToOcclusionMask(
   return refined;
 }
 
+/**
+ * Phase G (docs/true-3d-neck-attachment.md §13/14): the 3D-rendering counterpart to
+ * `applyJewelleryAlphaToOcclusionMask` above. That function needs a REGION because
+ * the 2D path renders the jewellery sprite into a small, bbox-cropped local canvas
+ * (a real performance optimization for a Canvas-2D sprite draw). The 3D path has no
+ * equivalent need: `three-live-bridge.ts`'s renderer already draws into a
+ * full-video-sized canvas every frame, so its alpha channel -- downscaled directly
+ * to the segmentation mask's own resolution, with NO region/crop math needed -- is
+ * already aligned index-for-index with `categoryOcclusionMask`. This is the ACTUAL
+ * 3D jewellery alpha (Step 14's own ask), not the jewellery's bounding box: a pixel
+ * only occludes when the category rule says so AND the 3D render actually has a
+ * real (non-transparent) jewellery pixel there.
+ */
+export function applyRenderedAlphaToOcclusionMask(
+  categoryOcclusionMask: Uint8ClampedArray,
+  renderedAlphaMask: Uint8ClampedArray,
+  alphaThresholdOutOf255: number = DEFAULT_JEWELLERY_ALPHA_THRESHOLD
+): Uint8ClampedArray {
+  const length = Math.min(categoryOcclusionMask.length, renderedAlphaMask.length);
+  const refined = new Uint8ClampedArray(categoryOcclusionMask);
+  for (let i = 0; i < length; i++) {
+    if (refined[i] === 0) continue; // category rule already says non-occluding
+    if (renderedAlphaMask[i] < alphaThresholdOutOf255) refined[i] = 0; // no real 3D jewellery pixel here
+  }
+  return refined;
+}
+
 /** 2026-09-24 controlled validation, Step 8: the two clearly-separated metrics the
  * bounding-box-only percentage conflated -- "Actual jewellery pixels" as the
  * denominator, never the bounding box, per that step's explicit instruction. Computed

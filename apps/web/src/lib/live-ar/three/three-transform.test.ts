@@ -6,6 +6,7 @@ import {
   computeMeshScaleFactor,
   computeThreeJewelleryTransform,
   computeVirtualDepthMm,
+  projectPointToScreen,
   projectWorldBoundingBoxToScreen,
   unprojectScreenPointAtDepth,
   yawAsymmetryToRadians,
@@ -207,5 +208,29 @@ describe("projectWorldBoundingBoxToScreen", () => {
     const narrowScreen = projectWorldBoundingBoxToScreen(narrow, camera, 640, 480);
     const wideScreen = projectWorldBoundingBoxToScreen(wide, camera, 640, 480);
     expect(wideScreen[2] - wideScreen[0]).toBeGreaterThan(narrowScreen[2] - narrowScreen[0]);
+  });
+});
+
+describe("projectPointToScreen", () => {
+  it("a point on the camera's forward axis projects to the screen center", () => {
+    const camera = new THREE.PerspectiveCamera(50, 640 / 480, 1, 10000);
+    camera.updateProjectionMatrix();
+    const center = projectPointToScreen({ x: 0, y: 0, z: -500 }, camera, 640, 480);
+    expect(center.x).toBeCloseTo(320, 1);
+    expect(center.y).toBeCloseTo(240, 1);
+  });
+
+  it("a point offset to +X projects to the right half of the screen", () => {
+    const camera = new THREE.PerspectiveCamera(50, 640 / 480, 1, 10000);
+    camera.updateProjectionMatrix();
+    const point = projectPointToScreen({ x: 50, y: 0, z: -500 }, camera, 640, 480);
+    expect(point.x).toBeGreaterThan(320);
+  });
+
+  it("a point offset to +Y (up) projects to the top half of the screen (screen Y increases downward)", () => {
+    const camera = new THREE.PerspectiveCamera(50, 640 / 480, 1, 10000);
+    camera.updateProjectionMatrix();
+    const point = projectPointToScreen({ x: 0, y: 50, z: -500 }, camera, 640, 480);
+    expect(point.y).toBeLessThan(240);
   });
 });

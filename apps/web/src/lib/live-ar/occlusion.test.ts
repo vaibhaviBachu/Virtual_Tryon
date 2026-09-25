@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyJewelleryAlphaToOcclusionMask,
+  applyRenderedAlphaToOcclusionMask,
   buildFinalVisibilityMaskRgba,
   clipRegionToMask,
   computeAlphaDownscaleSourceRect,
@@ -571,6 +572,50 @@ describe("applyJewelleryAlphaToOcclusionMask (Step 4's core correction)", () => 
     const fullAlpha = new Uint8ClampedArray(REGION_SIZE * REGION_SIZE).fill(255);
     const refined = applyJewelleryAlphaToOcclusionMask(categoryMask, REGION_SIZE, REGION_SIZE, region, fullAlpha);
     expect(refined.every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe("applyRenderedAlphaToOcclusionMask (Phase G — the 3D-render counterpart, full-frame, no region needed)", () => {
+  const SIZE = 6;
+  const region: OcclusionRegion = { leftPx: 0, topPx: 0, rightPx: SIZE, bottomPx: SIZE, attachmentYPx: 3 };
+
+  function renderedAlphaBlock(): Uint8ClampedArray {
+    const alpha = new Uint8ClampedArray(SIZE * SIZE);
+    for (const y of [2, 3]) for (const x of [2, 3]) alpha[y * SIZE + x] = 255;
+    return alpha;
+  }
+
+  it("hair filling the whole mask EXCEPT the 3D render's own alpha -> zero occlusion", () => {
+    const categoryData = uniformCategoryMask(HAIR, SIZE, SIZE);
+    for (const y of [2, 3]) for (const x of [2, 3]) categoryData[y * SIZE + x] = BACKGROUND;
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, SIZE, SIZE, region);
+    const refined = applyRenderedAlphaToOcclusionMask(categoryMask, renderedAlphaBlock());
+    expect(refined.every((v) => v === 0)).toBe(true);
+  });
+
+  it("hair exactly overlapping the rendered alpha -> exactly those pixels occlude", () => {
+    const categoryData = uniformCategoryMask(BACKGROUND, SIZE, SIZE);
+    for (const y of [2, 3]) for (const x of [2, 3]) categoryData[y * SIZE + x] = HAIR;
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, SIZE, SIZE, region);
+    const refined = applyRenderedAlphaToOcclusionMask(categoryMask, renderedAlphaBlock());
+    for (const y of [2, 3]) for (const x of [2, 3]) expect(refined[y * SIZE + x]).toBe(255);
+    expect(Array.from(refined).filter((v) => v === 255)).toHaveLength(4);
+  });
+
+  it("never occludes where the category rule itself says no (a category never adds occlusion the base mask didn't have)", () => {
+    const categoryData = uniformCategoryMask(BACKGROUND, SIZE, SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, SIZE, SIZE, region);
+    const fullAlpha = new Uint8ClampedArray(SIZE * SIZE).fill(255);
+    const refined = applyRenderedAlphaToOcclusionMask(categoryMask, fullAlpha);
+    expect(refined.every((v) => v === 0)).toBe(true);
+  });
+
+  it("respects a custom alpha threshold", () => {
+    const categoryData = uniformCategoryMask(HAIR, SIZE, SIZE);
+    const categoryMask = computeNecklaceOcclusionMask(categoryData, SIZE, SIZE, region);
+    const faintAlpha = new Uint8ClampedArray(SIZE * SIZE).fill(5);
+    expect(applyRenderedAlphaToOcclusionMask(categoryMask, faintAlpha, 10).every((v) => v === 0)).toBe(true);
+    expect(applyRenderedAlphaToOcclusionMask(categoryMask, faintAlpha, 1).every((v) => v === 255)).toBe(true);
   });
 });
 

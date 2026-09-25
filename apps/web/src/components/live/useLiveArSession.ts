@@ -15,8 +15,10 @@ import {
   OCCLUSION_STALE_MASK_THRESHOLD_MS,
   SEGMENTATION_INTERVAL_MS_DEFAULT,
 } from "@/lib/live-ar/constants";
+import { computeNeckReferenceFrame } from "@/lib/live-ar/neck-reference";
 import {
   applyJewelleryAlphaToOcclusionMask,
+  applyRenderedAlphaToOcclusionMask,
   buildFinalVisibilityMaskRgba,
   buildJewelleryAlphaDebugRgba,
   buildOcclusionDebugRgba,
@@ -39,6 +41,7 @@ import {
   compositeOccluded3dOverlay,
   drawJewelleryOverlay,
   drawNecklaceDebugOverlay,
+  drawNeckSurfaceDebugOverlay,
   drawOccludedJewelleryOverlay,
   drawSegmentationDebugOverlay,
   ensureCanvasSize,
@@ -47,9 +50,11 @@ import {
 import { buildSegmentationDebugRgba, createLiveSegmenter, runSegmentation, SegmentationCadenceScheduler, type LiveSegmenter } from "@/lib/live-ar/segmentation";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
 import { resolveAttachmentOrientation } from "@/lib/live-ar/three/body-attachment";
+import { computeNeckSurfaceFrame, derivePxPerMm, neckSurfacePointAt, type NeckSurfaceFrame } from "@/lib/live-ar/three/neck-surface-3d";
 import {
   attachmentTypeToTrackedCategory,
   createThreeLiveRuntime,
+  deriveScaleResultFromSmoothedTransform,
   disposeThreeLiveRuntime,
   loadLive3dJewelleryAsset,
   renderSurfaceAttachedFrame,
@@ -57,6 +62,7 @@ import {
   type ThreeLiveRuntime,
 } from "@/lib/live-ar/three/three-live-bridge";
 import { getThreeRenderStats } from "@/lib/live-ar/three/three-renderer";
+import { projectPointToScreen } from "@/lib/live-ar/three/three-transform";
 import { createLiveTrackers, detectFrameWithTiming, type LiveTrackers } from "@/lib/live-ar/tracking";
 import { TrackingStateMachine } from "@/lib/live-ar/tracking-state";
 import type { CategorySlug, JewelleryAssetGeometry, LiveTransform, TrackingStatus } from "@/lib/live-ar/types";
@@ -376,6 +382,10 @@ export function useLiveArSession({
   const loaded3dAssetRef = useRef<Live3dJewelleryAsset | null>(null);
   const three3dCompositeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const three3dEraseCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Phase G Step 13/14: scratch canvas for downscaling the 3D render's OWN alpha to
+  // the segmentation mask's resolution -- same "reused, resized only when needed"
+  // convention as the other 3D scratch canvases above.
+  const three3dAlphaScratchCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const assetGeometryRef = useRef<LoadedJewelleryTexture | null>(null);
   // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
   // fresh every frame inside the render loop (never restarts it), updated by the
@@ -793,6 +803,11 @@ export function useLiveArSession({
       // no WebGL2 context is available -- never a silent partial render.
       let occluded3dCanvas: HTMLCanvasElement | null = null;
       let live3dInfoThisFrame: UseLiveArSessionResult["live3dDebugInfo"] = null;
+      // Phase G Step 15: 2D-projected neck-surface debug points, computed inside the
+      // 3D block below (same frame, same runtime.camera) and consumed by the debug-
+      // overlay drawing further down the loop -- a local, not a ref, since nothing
+      // here needs to persist across frames.
+      let neckSurfaceDebugPoints: { outlinePx: { x: number; y: number }[]; frontPx: { x: number; y: number }; normalEndPx: { x: number; y: number }; attachmentPx: { x: number; y: number } } | null = null;
       if (category === "necklace" && loaded && overlays.length > 0) {
         const primaryOverlay = overlays[0];
         const asset3d = loaded3dAssetRef.current;
@@ -820,6 +835,48 @@ export function useLiveArSession({
             // both null, see that function's own tests).
             const orientation = resolveAttachmentOrientation("necklace", face, pose, videoWidthPx, videoHeightPx)!;
             const renderedCanvas = renderSurfaceAttachedFrame(runtime, asset3d, primaryOverlay.transform, loaded.geometry, orientation, videoWidthPx, videoHeightPx);
+
+            // Phase G Step 4/6/7: the real parametric neck surface. `runtime.
+            // currentInstance.position` is the SAME attachment point
+            // computeSurfaceAttachedTransform just computed (Phase F/E's already-
+            // validated position, unchanged) -- treated as the ellipse's own FRONT
+            // surface point (see neck-surface-3d.ts's file docstring for why).
+            // `pxPerMm3d` reuses the SAME calibration already trusted for the
+            // jewellery's own physical scale; `neckWidthPx` is the EXISTING (M6.2)
+            // neck-reference width estimate -- no new tracking, no new landmarks.
+            if (debugEnabledRef.current && runtime.currentInstance) {
+              const scale3d = deriveScaleResultFromSmoothedTransform(primaryOverlay.transform, loaded.geometry);
+              const pxPerMm3d = derivePxPerMm(scale3d.targetWidthPx, asset3d.metadata.physicalWidthMm);
+              const neckReferenceFrame3d = computeNeckReferenceFrame(face, pose, videoWidthPx, videoHeightPx);
+              const frontSurfaceMm = { x: runtime.currentInstance.position.x, y: runtime.currentInstance.position.y, z: runtime.currentInstance.position.z };
+              const neckFrame: NeckSurfaceFrame | null = computeNeckSurfaceFrame(
+                frontSurfaceMm,
+                orientation,
+                neckReferenceFrame3d?.widthPx ?? null,
+                pxPerMm3d,
+                orientation.confidence
+              );
+              if (neckFrame) {
+                const ANGLE_SAMPLES = 24;
+                const outlinePx = Array.from({ length: ANGLE_SAMPLES }, (_, i) => {
+                  const angle = (i / ANGLE_SAMPLES) * Math.PI * 2;
+                  const surfacePoint = neckSurfacePointAt(neckFrame, angle);
+                  return projectPointToScreen(surfacePoint.position, runtime.camera, videoWidthPx, videoHeightPx);
+                });
+                const front = neckSurfacePointAt(neckFrame, 0);
+                const frontPx = projectPointToScreen(front.position, runtime.camera, videoWidthPx, videoHeightPx);
+                const NORMAL_VISUAL_LENGTH_MM = 30; // arbitrary DRAWING length, not a physical claim -- long enough to see the line, never fed back into any placement math
+                const normalEndPx = projectPointToScreen(
+                  { x: front.position.x + front.normal.x * NORMAL_VISUAL_LENGTH_MM, y: front.position.y + front.normal.y * NORMAL_VISUAL_LENGTH_MM, z: front.position.z + front.normal.z * NORMAL_VISUAL_LENGTH_MM },
+                  runtime.camera,
+                  videoWidthPx,
+                  videoHeightPx
+                );
+                const attachmentPx = projectPointToScreen(frontSurfaceMm, runtime.camera, videoWidthPx, videoHeightPx);
+                neckSurfaceDebugPoints = { outlinePx, frontPx, normalEndPx, attachmentPx };
+              }
+            }
+
             if (renderedCanvas) {
               // Reuse the EXISTING category-level occlusion mask machinery
               // (computeNecklaceOcclusionMask/buildOcclusionEraseRgba, both
@@ -855,6 +912,28 @@ export function useLiveArSession({
                 );
                 const categoryMask3d = computeNecklaceOcclusionMask(latestMask3d.categoryData, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx, region3d);
 
+                // Phase G Step 13/14: refine using the 3D render's OWN real alpha,
+                // not just the coarse category rule (Phase E/F's own documented
+                // limitation). `renderedCanvas` is already full-video-sized, so
+                // downscaling it directly to the mask's resolution needs no region/
+                // crop math (unlike the 2D path's bbox-cropped equivalent above).
+                let occlusionMask3d = categoryMask3d;
+                if (!three3dAlphaScratchCanvasRef.current) three3dAlphaScratchCanvasRef.current = document.createElement("canvas");
+                const alphaScratchCanvas3d = three3dAlphaScratchCanvasRef.current;
+                if (alphaScratchCanvas3d.width !== latestMask3d.maskWidthPx || alphaScratchCanvas3d.height !== latestMask3d.maskHeightPx) {
+                  alphaScratchCanvas3d.width = latestMask3d.maskWidthPx;
+                  alphaScratchCanvas3d.height = latestMask3d.maskHeightPx;
+                }
+                const alphaScratchCtx3d = alphaScratchCanvas3d.getContext("2d");
+                if (alphaScratchCtx3d) {
+                  alphaScratchCtx3d.clearRect(0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+                  alphaScratchCtx3d.drawImage(renderedCanvas, 0, 0, videoWidthPx, videoHeightPx, 0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+                  const { data: renderedRgba3d } = alphaScratchCtx3d.getImageData(0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+                  const renderedAlpha3d = new Uint8ClampedArray(latestMask3d.maskWidthPx * latestMask3d.maskHeightPx);
+                  for (let i = 0; i < renderedAlpha3d.length; i++) renderedAlpha3d[i] = renderedRgba3d[i * 4 + 3];
+                  occlusionMask3d = applyRenderedAlphaToOcclusionMask(categoryMask3d, renderedAlpha3d);
+                }
+
                 if (!three3dEraseCanvasRef.current) three3dEraseCanvasRef.current = document.createElement("canvas");
                 const eraseCanvas3d = three3dEraseCanvasRef.current;
                 if (eraseCanvas3d.width !== latestMask3d.maskWidthPx || eraseCanvas3d.height !== latestMask3d.maskHeightPx) {
@@ -863,7 +942,7 @@ export function useLiveArSession({
                 }
                 const eraseCtx3d = eraseCanvas3d.getContext("2d");
                 if (eraseCtx3d) {
-                  const eraseRgba3d = buildOcclusionEraseRgba(categoryMask3d);
+                  const eraseRgba3d = buildOcclusionEraseRgba(occlusionMask3d);
                   eraseCtx3d.putImageData(
                     new ImageData(eraseRgba3d as Uint8ClampedArray<ArrayBuffer>, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx),
                     0,
@@ -1304,6 +1383,20 @@ export function useLiveArSession({
             lastDebugStateUpdateAtMsRef.current = frameStartMs;
             setDebugSnapshot(snapshot);
           }
+        }
+        // Phase G Step 15: the real parametric neck surface (computed earlier this
+        // frame, using the SAME runtime.camera the jewellery was actually rendered
+        // with), drawn on top of the same debug overlay -- this is what makes "why
+        // does the jewellery float" answerable by looking at the frame, not just
+        // reading numbers.
+        if (neckSurfaceDebugPoints) {
+          drawNeckSurfaceDebugOverlay(
+            ctx,
+            neckSurfaceDebugPoints.outlinePx,
+            neckSurfaceDebugPoints.frontPx,
+            neckSurfaceDebugPoints.normalEndPx,
+            neckSurfaceDebugPoints.attachmentPx
+          );
         }
       }
 

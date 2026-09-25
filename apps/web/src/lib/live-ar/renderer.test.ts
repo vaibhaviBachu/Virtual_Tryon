@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   compositeOccluded3dOverlay,
   drawJewelleryOverlay,
+  drawNeckSurfaceDebugOverlay,
   drawOccludedJewelleryOverlay,
   drawSegmentationDebugOverlay,
   ensureCanvasSize,
@@ -282,6 +283,61 @@ describe("drawSegmentationDebugOverlay", () => {
     const { ctx, calls } = makeFakeCtx();
     drawSegmentationDebugOverlay(ctx, {} as CanvasImageSource, 256, 256, 640, 480);
     expect(calls).toEqual(["drawImage"]);
+  });
+});
+
+function makeFakeDebugCtx() {
+  const calls: string[] = [];
+  const ctx = {
+    save: vi.fn(() => calls.push("save")),
+    restore: vi.fn(() => calls.push("restore")),
+    beginPath: vi.fn(() => calls.push("beginPath")),
+    closePath: vi.fn(() => calls.push("closePath")),
+    moveTo: vi.fn((x: number, y: number) => calls.push(`moveTo(${x},${y})`)),
+    lineTo: vi.fn((x: number, y: number) => calls.push(`lineTo(${x},${y})`)),
+    stroke: vi.fn(() => calls.push("stroke")),
+    fill: vi.fn(() => calls.push("fill")),
+    arc: vi.fn(() => calls.push("arc")),
+    setLineDash: vi.fn(() => calls.push("setLineDash")),
+    strokeText: vi.fn(() => calls.push("strokeText")),
+    fillText: vi.fn(() => calls.push("fillText")),
+    strokeStyle: "",
+    fillStyle: "",
+    lineWidth: 1,
+    font: "",
+  };
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls };
+}
+
+describe("drawNeckSurfaceDebugOverlay", () => {
+  it("draws a closed outline polyline through every outline point", () => {
+    const { ctx, calls } = makeFakeDebugCtx();
+    const outline = [{ x: 10, y: 10 }, { x: 20, y: 10 }, { x: 20, y: 20 }, { x: 10, y: 20 }];
+    drawNeckSurfaceDebugOverlay(ctx, outline, { x: 15, y: 15 }, { x: 15, y: 5 }, { x: 16, y: 16 });
+    expect(calls).toContain("moveTo(10,10)");
+    expect(calls).toContain("lineTo(20,10)");
+    expect(calls).toContain("lineTo(20,20)");
+    expect(calls).toContain("lineTo(10,20)");
+    expect(calls).toContain("closePath");
+  });
+
+  it("draws the normal line from the front point to the normal end point", () => {
+    const { ctx, calls } = makeFakeDebugCtx();
+    drawNeckSurfaceDebugOverlay(ctx, [], { x: 15, y: 15 }, { x: 15, y: 5 }, { x: 16, y: 16 });
+    expect(calls).toContain("moveTo(15,15)");
+    expect(calls).toContain("lineTo(15,5)");
+  });
+
+  it("skips the outline polyline entirely when fewer than 2 points are given (nothing to draw)", () => {
+    const { ctx, calls } = makeFakeDebugCtx();
+    drawNeckSurfaceDebugOverlay(ctx, [{ x: 1, y: 1 }], { x: 15, y: 15 }, { x: 15, y: 5 }, { x: 16, y: 16 });
+    expect(calls.filter((c) => c === "closePath")).toHaveLength(0);
+  });
+
+  it("draws both marker points (front surface point and jewellery origin)", () => {
+    const { ctx, calls } = makeFakeDebugCtx();
+    drawNeckSurfaceDebugOverlay(ctx, [], { x: 15, y: 15 }, { x: 15, y: 5 }, { x: 16, y: 16 });
+    expect(calls.filter((c) => c === "arc")).toHaveLength(2); // drawDebugPoint draws a circle per marker
   });
 });
 

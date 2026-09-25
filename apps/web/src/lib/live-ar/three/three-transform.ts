@@ -145,6 +145,18 @@ export function computeThreeJewelleryTransform(
   };
 }
 
+/** Projects a single world-space point through `camera` into canvas pixel space --
+ * the single-point primitive `projectWorldBoundingBoxToScreen` below (per-corner)
+ * and Phase G's debug neck-surface overlay (`useLiveArSession.ts`) both build on,
+ * so there is exactly one implementation of "world point -> screen pixel" in this
+ * codebase's 3D path. Pure CPU math (`Vector3.project`) -- no WebGL context
+ * required. Caller must have already positioned the camera and called
+ * `camera.updateProjectionMatrix()` (or gone through `updateCameraForViewport`). */
+export function projectPointToScreen(pointMm: { x: number; y: number; z: number }, camera: THREE.Camera, viewportWidthPx: number, viewportHeightPx: number): PixelPoint {
+  const ndc = new THREE.Vector3(pointMm.x, pointMm.y, pointMm.z).project(camera);
+  return { x: ((ndc.x + 1) / 2) * viewportWidthPx, y: ((1 - ndc.y) / 2) * viewportHeightPx };
+}
+
 /** Projects a mesh's world-space bounding box (spec Step 15's "isolated transparent
  * buffer" needs to know WHERE on screen the mesh actually landed, the same role
  * `computeTransformedBoundingBox` plays for the 2D pipeline's occlusion scoping) into
@@ -159,21 +171,21 @@ export function projectWorldBoundingBoxToScreen(
   viewportHeightPx: number
 ): [number, number, number, number] {
   const corners = [
-    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
-    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
-    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
-    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
-    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
-    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
-    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
-    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+    { x: box.min.x, y: box.min.y, z: box.min.z },
+    { x: box.min.x, y: box.min.y, z: box.max.z },
+    { x: box.min.x, y: box.max.y, z: box.min.z },
+    { x: box.min.x, y: box.max.y, z: box.max.z },
+    { x: box.max.x, y: box.min.y, z: box.min.z },
+    { x: box.max.x, y: box.min.y, z: box.max.z },
+    { x: box.max.x, y: box.max.y, z: box.min.z },
+    { x: box.max.x, y: box.max.y, z: box.max.z },
   ];
   const xsPx: number[] = [];
   const ysPx: number[] = [];
   for (const corner of corners) {
-    const ndc = corner.clone().project(camera);
-    xsPx.push(((ndc.x + 1) / 2) * viewportWidthPx);
-    ysPx.push(((1 - ndc.y) / 2) * viewportHeightPx);
+    const px = projectPointToScreen(corner, camera, viewportWidthPx, viewportHeightPx);
+    xsPx.push(px.x);
+    ysPx.push(px.y);
   }
   return [Math.min(...xsPx), Math.min(...ysPx), Math.max(...xsPx), Math.max(...ysPx)];
 }

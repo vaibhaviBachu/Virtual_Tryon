@@ -207,6 +207,51 @@ export function drawNecklaceDebugOverlay(ctx: CanvasRenderingContext2D, snapshot
   drawDebugPoint(ctx, snapshot.finalAttachmentPx, "white", "JEWELLERY ATTACHMENT");
 }
 
+/**
+ * Phase G (docs/true-3d-neck-attachment.md §10): draws the real parametric neck
+ * surface (three/neck-surface-3d.ts), already projected to screen space by the
+ * caller (`useLiveArSession.ts`, via `projectPointToScreen` against the SAME
+ * `THREE.PerspectiveCamera` the jewellery itself was rendered with -- one source of
+ * truth, never a second/approximate projection). Answers Step 15's own diagnostic
+ * ask directly: "why does the jewellery float" is only answerable by SEEING where
+ * the code currently thinks the neck surface, its normal, and the jewellery's own
+ * attachment point are, on the actual live frame -- not by reading numbers alone.
+ * Purely diagnostic; never affects jewellery placement/compositing itself.
+ */
+export function drawNeckSurfaceDebugOverlay(
+  ctx: CanvasRenderingContext2D,
+  outlinePx: PixelPoint[],
+  frontPointPx: PixelPoint,
+  normalEndPx: PixelPoint,
+  attachmentPx: PixelPoint
+): void {
+  if (outlinePx.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = "deepskyblue";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(outlinePx[0].x, outlinePx[0].y);
+    for (const point of outlinePx.slice(1)) ctx.lineTo(point.x, point.y);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = "yellow";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(frontPointPx.x, frontPointPx.y);
+  ctx.lineTo(normalEndPx.x, normalEndPx.y);
+  ctx.stroke();
+  ctx.restore();
+
+  drawDebugPoint(ctx, frontPointPx, "deepskyblue", "NECK SURFACE FRONT");
+  drawDebugPoint(ctx, attachmentPx, "yellow", "3D JEWELLERY ORIGIN");
+}
+
 /** M6.4 (docs/live-ar-realism-architecture.md §6/§8/§17): draws one jewellery overlay
  * onto an OFFSCREEN canvas -- never the main canvas directly -- then erases the
  * occluding pixels (hair/qualifying-clothes, per occlusion.ts's documented rule) using
