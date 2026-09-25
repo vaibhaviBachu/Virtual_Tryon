@@ -93,6 +93,12 @@ export function LiveArStudio() {
   // (see debug.ts's WearGeometryDebugInput doc comment); this toggle is only for the
   // rendered-pixel A/B comparison.
   const [showWearComparison, setShowWearComparison] = useState(false);
+  // Phase H.1 diagnostic (docs/2-5d-jewellery-surface-attachment.md's incident
+  // follow-up) Step 5's explicit ask: "temporarily disable ALL occlusion... if the
+  // rectangle disappears, the occlusion pipeline is the bug." Unlike
+  // showOcclusionDebug above, this actually turns compositing off, not just its
+  // visualization -- lets a real device test isolate the cause directly.
+  const [disable3dOcclusionForDebug, setDisable3dOcclusionForDebug] = useState(false);
   // Persisted, per-browser calibration override (see neck-fraction-override.ts) -- the
   // automatic default from constants.ts is used unless/until someone saves a value from
   // the slider below, at which point it applies on every necklace session in THIS
@@ -258,6 +264,7 @@ export function LiveArStudio() {
     showSegmentationDebug,
     showOcclusionDebug,
     showWearComparison,
+    disable3dOcclusionForDebug,
   });
 
   async function handleCapture() {
@@ -475,6 +482,17 @@ export function LiveArStudio() {
                   onClick={() => setShowWearComparison((v) => !v)}
                 >
                   {showWearComparison ? "Hide" : "Show"} wear comparison (M6.5 vs M6.6)
+                </button>
+              )}
+              {/* Phase H.1 diagnostic -- dev-only. Unlike the debug toggles above, this
+                  actually disables 3D/2.5D occlusion compositing, not just its overlay. */}
+              {category === "necklace" && (
+                <button
+                  type="button"
+                  className="text-xs text-amber-400 underline-offset-2 hover:underline"
+                  onClick={() => setDisable3dOcclusionForDebug((v) => !v)}
+                >
+                  {disable3dOcclusionForDebug ? "Re-enable" : "Disable"} 3D/2.5D occlusion (diagnostic)
                 </button>
               )}
               <Button onClick={handleCapture} disabled={isLoadingPipeline || captureState === "capturing"}>

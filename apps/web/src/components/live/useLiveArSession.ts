@@ -155,10 +155,14 @@ function compositeRendered3dFrame(
   scheduler: SegmentationCadenceScheduler,
   compositeCanvasRef: { current: HTMLCanvasElement | null },
   alphaScratchCanvasRef: { current: HTMLCanvasElement | null },
-  eraseCanvasRef: { current: HTMLCanvasElement | null }
+  eraseCanvasRef: { current: HTMLCanvasElement | null },
+  // Phase H.1 Step 5's diagnostic ask: forces the SAME "no occlusion, just apply
+  // opacity" fallback already used for a stale/missing mask below -- never a new
+  // code path. `false` (the default) is byte-for-byte the pre-existing behavior.
+  forceNoOcclusion = false
 ): HTMLCanvasElement | null {
   const maskAgeMs3d = scheduler.getLatestAgeMs(frameStartMs);
-  const stale3d = isMaskStale(maskAgeMs3d, OCCLUSION_STALE_MASK_THRESHOLD_MS);
+  const stale3d = forceNoOcclusion || isMaskStale(maskAgeMs3d, OCCLUSION_STALE_MASK_THRESHOLD_MS);
   const latestMask3d = scheduler.getLatest();
 
   if (!compositeCanvasRef.current) compositeCanvasRef.current = document.createElement("canvas");
@@ -291,6 +295,16 @@ export interface UseLiveArSessionArgs {
    * the SAME camera frame and jewellery the main canvas draws this frame, so the two
    * can be compared side by side without altering tracking/placement itself. */
   showWearComparison?: boolean;
+  /** Phase H.1 (docs/2-5d-jewellery-surface-attachment.md's incident follow-up)
+   * Step 5's explicit diagnostic ask: "temporarily disable ALL occlusion... if the
+   * rectangle disappears, the occlusion pipeline is the bug." Unlike
+   * `showOcclusionDebug` (which only controls whether the decision is VISUALIZED --
+   * compositing itself is always on), this flag, when true, skips
+   * `compositeRendered3dFrame`'s occlusion branch entirely for the 3D/2.5D path,
+   * forcing the same "no occlusion, just apply opacity" fallback that already
+   * exists for a stale/missing mask -- never a new code path, just an existing one
+   * forced on. Dev/debug-only, defaults to false (unchanged behavior). */
+  disable3dOcclusionForDebug?: boolean;
 }
 
 export interface UseLiveArSessionResult {
@@ -421,6 +435,7 @@ export function useLiveArSession({
   showSegmentationDebug = false,
   showOcclusionDebug = false,
   showWearComparison = false,
+  disable3dOcclusionForDebug = false,
 }: UseLiveArSessionArgs): UseLiveArSessionResult {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -529,6 +544,8 @@ export function useLiveArSession({
   showOcclusionDebugRef.current = showOcclusionDebug;
   const showWearComparisonRef = useRef(showWearComparison);
   showWearComparisonRef.current = showWearComparison;
+  const disable3dOcclusionForDebugRef = useRef(disable3dOcclusionForDebug);
+  disable3dOcclusionForDebugRef.current = disable3dOcclusionForDebug;
   // Read fresh every frame from a ref (not render-loop-effect state) so dragging the
   // calibration slider doesn't tear down and restart tracking/smoothing state each tick.
   const debugNeckFractionOverrideRef = useRef(debugNeckFractionOverride);
@@ -1058,7 +1075,8 @@ export function useLiveArSession({
                 segmentationSchedulerRef.current,
                 three3dCompositeCanvasRef,
                 three3dAlphaScratchCanvasRef,
-                three3dEraseCanvasRef
+                three3dEraseCanvasRef,
+                disable3dOcclusionForDebugRef.current
               );
 
               const stats = getThreeRenderStats(runtime.renderer.info);
