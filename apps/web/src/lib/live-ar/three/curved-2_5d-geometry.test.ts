@@ -40,7 +40,7 @@ describe("createCurvedRibbonGeometry", () => {
     expect(size.z).toBeGreaterThan(10); // real, non-trivial depth from the sagitta
   });
 
-  it("UVs span exactly [0,1] in both u and v, with v=0 at the top and v=1 at the bottom (Step 6's UV-preservation requirement)", () => {
+  it("UVs span exactly [0,1] in both u and v, with v=0 at the top and v=1 at the bottom (Step 6's UV-preservation requirement -- pairing this with a texture requires texture.flipY = false, see curved-2_5d-bridge.ts's buildCurved25dAsset)", () => {
     const geometry = createCurvedRibbonGeometry({ controlPointsMm: STRAIGHT_LINE, closed: false, heightMm: 100, segmentsU: 8, segmentsV: 4 });
     const uv = geometry.getAttribute("uv");
     const position = geometry.getAttribute("position");

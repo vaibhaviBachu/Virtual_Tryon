@@ -83,6 +83,22 @@ the *same* `HTMLImageElement` the existing 2D pipeline already decoded
 (`asset-cache.ts`'s `loadJewelleryAssetTexture`) — never a second fetch or
 decode of the artwork.
 
+**A real orientation bug shipped in the first version of this phase and was
+caught by the user's real webcam test, not by this document's own real-browser
+verification (§18).** `THREE.Texture`'s default `flipY = true` samples UV
+`v=0` from the source image's *bottom* row, not its top — the opposite of the
+intuitive reading. This geometry's `v=0`-at-mesh-top convention (verified by
+`curved-2_5d-geometry.test.ts`, correctly) was paired with that default, so
+the mesh's visual "top" was textured with the image's bottom row and vice
+versa: the choker rendered upside down (the drop stones pointing up, the
+smooth collar band at the bottom, rather than the collar band at top and
+drops hanging down). Fixed with one line, `texture.flipY = false`, in
+`buildCurved25dAsset`. §18's silhouette/bounding-box measurements never
+exercised this — they check *shape*, not *content orientation* — a real gap
+in that verification's coverage, now closed by a permanent regression test
+(`curved-2_5d-bridge.test.ts`, asserting `material.map.flipY === false`) and
+a corrected screenshot (§18).
+
 ## 5. Neck attachment — reusing the existing surface, not a second model
 
 This phase adds no new neck model. The curved-2.5D mesh is positioned,
@@ -166,14 +182,23 @@ curved-ribbon mesh is built exactly once per item selection (in
 
 ## 12. Real-person test results
 
-**Not performed by me.** As with every prior phase of this project
-(Phases E–H), I have no camera and cannot run the live app against a real
-human face in this non-interactive environment. What *is* verified (§18) is a
-real-browser (headless Chromium, real WebGL2/SwiftShader) render of the
-actual shipped code, the actual real Diamond Choker artwork, and real,
-measured pixel output — but not a live camera session with a real person
-wearing it. That test remains the user's own, exactly as it has for every
-phase before this one.
+**Not performed by me** — as with every prior phase of this project, I have
+no camera and cannot run the live app against a real human face in this
+non-interactive environment. §18's real-browser verification is a headless
+Chromium render of the actual shipped code and the actual real Diamond
+Choker artwork, not a live camera session with a real person wearing it.
+
+The user *did* perform this test, on the first shipped version of this
+phase, and found a real defect immediately: the choker rendered upside down
+— drop stones pointing up, the smooth collar band at the bottom, instead of
+the collar band at top against the neckline and drops hanging down. Root
+cause and fix are documented in §4 (`texture.flipY` was left at THREE's
+default instead of set to `false`). This is exactly the kind of error §18's
+own silhouette/bounding-box measurements were not designed to catch — they
+verify *shape* (is this curved or flat), not *content orientation* — and is
+now recorded as a real gap in that verification, closed with a permanent
+regression test. The real-webcam re-test after this fix remains the user's
+own next step.
 
 ## 13. Known limitations
 
@@ -345,6 +370,19 @@ bypassing the compositor) fixed it; this was a bug in the **verification
 harness**, not in `curved-2_5d-geometry.ts`/`curved-2_5d-bridge.ts`/
 `three-live-bridge.ts` themselves, none of which were changed by this fix.
 
+**A second, real bug — this time in the shipped product code, not the
+harness — was found by the user's actual webcam test, not by this
+verification: the choker rendered upside down.** §12 and §4 have the full
+account (`texture.flipY` defaulting to `true` instead of `false`). Re-running
+this exact harness after the one-line fix confirms the correct orientation:
+the collar band is now at the top of the render and the drop stones hang
+down, matching the source artwork's own top-to-bottom order and how the
+piece is actually worn. This is a direct, honest illustration of §18's own
+methodology gap: bounding-box/silhouette measurements confirm *shape*
+correctness and cannot, by construction, detect a content-orientation error
+like this one — which is exactly why the real webcam test in §12 still
+matters and was not redundant with this section.
+
 ## 19. Performance — the measured FPS number
 
 Measured via the same real-browser harness: `renderCurved25dFrame` called
@@ -353,8 +391,10 @@ trivially cached), wall-clock timed, on the real Diamond Choker asset, under
 **software rendering** (SwiftShader — no real GPU in this sandbox, normally
 the slowest case, not the fastest):
 
-**240 frames in 107.9ms → 0.45ms/frame average → 2224 FPS** (isolated render
-call only).
+**240 frames in 108–180ms → 0.45–0.75ms/frame average → roughly 1300–2700 FPS
+across repeated runs** (isolated render call only; the run-to-run spread
+reflects this sandbox's own software-rendering noise, not the code itself —
+every run stayed well under 1ms/frame).
 
 **Honest scope of this number:** this measures *only* the Three.js
 render-and-composite-transform step in isolation. It does **not** include
@@ -373,9 +413,10 @@ has equivalent per-frame cost.
 - `curved-2_5d-geometry.test.ts` (8 tests): control-point validation, flat vs.
   curved depth extent, UV correctness (§16), configurable/default segment
   counts, closed-loop topology, real (non-degenerate) vertex normals.
-- `curved-2_5d-bridge.test.ts` (24 tests): registry resolution and
+- `curved-2_5d-bridge.test.ts` (25 tests): registry resolution and
   `productionVerified` gating, asset construction (correct material/texture/
-  bounding box), and — added this phase — synthetic orientation coverage
+  bounding box), a permanent regression test for the `texture.flipY`
+  orientation bug (§4/§12/§18), and synthetic orientation coverage
   (Step 19's scenario list, as pure transform math): yaw at 0/±15/±30/±45°,
   pitch at ±15/±25°, roll at ±10/20°, camera closer vs. farther (scale
   factor), shoulder/head movement (anchor shift), and degraded-tracking
@@ -389,10 +430,12 @@ has equivalent per-frame cost.
   `computeSurfaceAttachedTransformFromDimensions`/`renderInstanceWithTransform`
   extraction (§17) preserved behavior exactly.
 
-Full suite: **645 tests, 644 passing** — the one failure
-(`JewelleryCreateForm.test.tsx`, an admin catalogue-form test unrelated to
-Live AR) passed in isolation on re-run, confirming pre-existing flakiness
-unrelated to this phase (not touched, not caused, by any file listed in §15).
+Full suite: **646 tests** (one more than the pre-fix run, from the new
+`flipY` regression test), **645 real passes** — the only failures seen
+across repeated full-suite runs are in `JewelleryCreateForm.test.tsx` (an
+admin catalogue-form test unrelated to Live AR, not touched by this phase),
+which passes cleanly every time it's run in isolation, confirming
+pre-existing flakiness rather than a regression from any file listed in §15.
 
 ---
 
@@ -403,17 +446,18 @@ unrelated to this phase (not touched, not caused, by any file listed in §15).
 | Real artwork used as texture (never replaced/redrawn) | **PASS** |
 | Real 3D curvature (not a flat sticker) — bounding box / edge-symmetry evidence | **PASS** |
 | UV mapping preserves original artwork exactly | **PASS** |
+| Content orientation correct (right-side up, not mirrored/flipped) | **PASS — after fix; the first shipped version FAILED this, caught by the user's real webcam test, see §4/§12** |
 | Reuses existing neck-attachment/camera/scale math (no second model) | **PASS** |
 | Reuses existing occlusion compositing (no duplicated implementation) | **PASS** |
 | Flat-2D fallback preserved and still the default for every unverified item | **PASS** |
 | Mesh built once per item, never per frame | **PASS** |
 | Representation contract generalized (gltf-3d > curved-2.5d > layered-2.5d > flat-2d) | **PASS** |
 | Only necklace/Diamond Choker implemented deeply this phase | **PASS (by design)** |
-| Automated test coverage (geometry, bridge, contract, debug) | **PASS — 645 tests, 644 passing, 1 pre-existing unrelated flake** |
+| Automated test coverage (geometry, bridge, contract, debug) | **PASS — 646 tests, 645 passing, 1 pre-existing unrelated flake** |
 | `tsc --noEmit` / `eslint` on all touched files | **PASS — 0 new errors** |
-| Real-browser verification with actual shipped code + real artwork | **PASS** — see §18 |
-| Measured FPS (isolated render step, software-rendered) | **2224 FPS** (0.45ms/frame) — see §19 for scope |
-| Real-person webcam test | **NOT PERFORMED** — see §12; remains the user's own step, as with every prior phase |
+| Real-browser verification with actual shipped code + real artwork | **PASS, with a documented gap** — see §18 (shape verified; content-orientation was not, and missed the flipY bug) |
+| Measured FPS (isolated render step, software-rendered) | **~1300–2700 FPS** (well under 1ms/frame) — see §19 for scope |
+| Real-person webcam test | **PARTIALLY PERFORMED, by the user** — found the orientation bug (§12); a re-test after the fix remains the user's own next step |
 
 **Stop condition check:** after proper surface mapping, does it still look
 like a flat sticker? No — §18's bounding-box and edge-symmetry measurements

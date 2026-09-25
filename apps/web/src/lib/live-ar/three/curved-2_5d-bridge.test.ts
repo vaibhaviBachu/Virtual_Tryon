@@ -39,6 +39,14 @@ describe("buildCurved25dAsset", () => {
     expect(material.side).toBe(THREE.DoubleSide);
   });
 
+  it("REGRESSION: sets texture.flipY = false -- a real webcam test showed the choker rendered upside down (spikes at the bottom, smooth band at the top) when this was left at THREE's default (true), which samples UV v=0 from the source image's BOTTOM row rather than its top; createCurvedRibbonGeometry's own v=0-at-mesh-top convention is only correct paired with flipY=false", () => {
+    const metadata = resolveCurved25dAssetMetadata(DIAMOND_CHOKER_ID)!;
+    const asset = buildCurved25dAsset(metadata, {} as HTMLImageElement);
+    const mesh = asset.instance.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    const material = mesh.material as THREE.MeshBasicMaterial;
+    expect(material.map!.flipY).toBe(false);
+  });
+
   it("the measured bounding-box width is close to the item's own physicalWidthMm (the ribbon is built at that width)", () => {
     const metadata = resolveCurved25dAssetMetadata(DIAMOND_CHOKER_ID)!;
     const asset = buildCurved25dAsset(metadata, {} as HTMLImageElement);

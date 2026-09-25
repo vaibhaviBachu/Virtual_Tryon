@@ -110,6 +110,15 @@ export function buildCurved25dAsset(metadata: Curved25dAssetMetadata, image: HTM
   const texture = new THREE.Texture(image);
   texture.needsUpdate = true;
   texture.colorSpace = THREE.SRGBColorSpace;
+  // `flipY = false`: THREE.Texture's DEFAULT (flipY = true) flips the image during
+  // GPU upload so that UV v=0 samples the source image's BOTTOM row, not its top
+  // (the opposite of the intuitive reading -- confirmed the hard way, via a real
+  // webcam screenshot showing this choker's design upside down: its top row, the
+  // pointed/spiked elements, rendered at the mesh's bottom instead of its top).
+  // `createCurvedRibbonGeometry`'s own v=0-at-mesh-top convention
+  // (curved-2_5d-geometry.ts, verified by its own test) is only correct when v=0
+  // samples the image's OWN top row directly -- i.e. with the flip disabled.
+  texture.flipY = false;
   // Unlit (Step 6/Phase D's own established reasoning, generalized): the source
   // PNG is a real PHOTOGRAPH with its own baked-in lighting/shading already
   // correct for the piece -- applying additional PBR scene lighting on top would

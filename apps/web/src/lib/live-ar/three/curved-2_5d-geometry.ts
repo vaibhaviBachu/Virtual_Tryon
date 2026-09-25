@@ -63,15 +63,23 @@ export const DEFAULT_RIBBON_SEGMENTS_V = 16;
 /**
  * Builds the curved ribbon as a real, textured-ready `THREE.BufferGeometry`.
  * UVs are a standard planar (u, v) grid mapping DIRECTLY onto the full texture
- * (u=0..1 across the curve, v=0..1 from top to bottom) -- Step 6's own requirement
- * ("UV coordinates must map the original image correctly... do not redraw or
- * regenerate the artwork"): nothing about the source image is altered; only where
- * each pixel's corresponding vertex sits in 3D space changes. Non-indexed (flat
- * per-quad winding, matching `jewellery-3d-generator/primitives.ts`'s own
- * established convention) -- normals point along the fixed reference "depth"
- * direction, correct for a single-sided textured ribbon meant to be viewed with
- * `THREE.DoubleSide` material (the mesh has no back geometry to speak of; the
- * material renders both faces of the same thin ribbon).
+ * (u=0..1 across the curve, v=0..1 from top to bottom of the MESH) -- Step 6's own
+ * requirement ("UV coordinates must map the original image correctly... do not
+ * redraw or regenerate the artwork"): nothing about the source image is altered;
+ * only where each pixel's corresponding vertex sits in 3D space changes.
+ *
+ * v=0-at-mesh-top is only correct paired with `texture.flipY = false` on the
+ * consuming texture (`curved-2_5d-bridge.ts`'s `buildCurved25dAsset`) -- THREE's
+ * DEFAULT `flipY = true` samples v=0 from the source image's BOTTOM row, not its
+ * top (confirmed the hard way: an earlier version of this pairing rendered the
+ * real Diamond Choker upside down on a real webcam -- its top row, the
+ * pointed/spiked design elements, appeared at the mesh's bottom).
+ *
+ * Non-indexed (flat per-quad winding, matching `jewellery-3d-generator/
+ * primitives.ts`'s own established convention) -- normals point along the fixed
+ * reference "depth" direction, correct for a single-sided textured ribbon meant to
+ * be viewed with `THREE.DoubleSide` material (the mesh has no back geometry to
+ * speak of; the material renders both faces of the same thin ribbon).
  */
 export function createCurvedRibbonGeometry(params: CurvedRibbonParams): THREE.BufferGeometry {
   const { controlPointsMm, closed, heightMm } = params;
