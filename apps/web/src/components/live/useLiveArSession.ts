@@ -36,6 +36,7 @@ import {
 import { PerformanceTracker, type PerformanceSnapshot } from "@/lib/live-ar/performance";
 import { evaluateEarringsReadiness, evaluateNecklaceReadiness, type ReadinessResult } from "@/lib/live-ar/readiness";
 import {
+  compositeOccluded3dOverlay,
   drawJewelleryOverlay,
   drawNecklaceDebugOverlay,
   drawOccludedJewelleryOverlay,
@@ -45,6 +46,16 @@ import {
 } from "@/lib/live-ar/renderer";
 import { buildSegmentationDebugRgba, createLiveSegmenter, runSegmentation, SegmentationCadenceScheduler, type LiveSegmenter } from "@/lib/live-ar/segmentation";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
+import {
+  attachmentTypeToTrackedCategory,
+  createThreeLiveRuntime,
+  disposeThreeLiveRuntime,
+  loadLive3dJewelleryAsset,
+  renderLive3dFrame,
+  type Live3dJewelleryAsset,
+  type ThreeLiveRuntime,
+} from "@/lib/live-ar/three/three-live-bridge";
+import { getThreeRenderStats } from "@/lib/live-ar/three/three-renderer";
 import { createLiveTrackers, detectFrameWithTiming, type LiveTrackers } from "@/lib/live-ar/tracking";
 import { TrackingStateMachine } from "@/lib/live-ar/tracking-state";
 import type { CategorySlug, JewelleryAssetGeometry, LiveTransform, TrackingStatus } from "@/lib/live-ar/types";
@@ -239,6 +250,19 @@ export interface UseLiveArSessionResult {
      * the UI from other fields -- read directly off the same gate the render loop uses. */
     occlusionActive: boolean;
   } | null;
+  /** Phase E Step 21: generic 3D debug info -- reflects whichever item currently has
+   * a resolved 3D asset (see three-live-bridge.ts's registry), never a specific
+   * item's own hardcoded fields. `status` distinguishes "this item has no 3D asset at
+   * all" (`"none"`, the common case) from `"loading"`/`"error"`/`"rendered"`. Null
+   * fields (`transform`/`stats`) mean exactly what they say -- no 3D frame was
+   * actually rendered this tick, never a fabricated placeholder. */
+  live3dDebugInfo: {
+    status: "none" | "loading" | "error" | "webgl_unavailable" | "rendered";
+    jewelleryId: string | null;
+    attachmentType: string | null;
+    transform: { positionMm: { x: number; y: number; z: number }; scale: number; yawAsymmetry: number } | null;
+    stats: { drawCalls: number; triangles: number; textures: number; geometries: number } | null;
+  } | null;
   /** M6.4 real-device review Step 2: a small canvas the render loop draws the FINAL
    * jewellery-visibility mask into (white = visible, black = occluded, always fully
    * opaque) -- render it directly via `<canvas ref={session.finalVisibilityMaskCanvasRef} />`
@@ -330,6 +354,22 @@ export function useLiveArSession({
   // segmentation category data.
   const jewelleryAlphaLocalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const jewelleryAlphaRegionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Phase E: the generic 3D bridge (three-live-bridge.ts). threeRuntimeRef holds the
+  // ONE persistent, offscreen Three.js renderer/scene/camera for the whole session
+  // (created lazily on first use, never per frame or per item -- Step 17/20).
+  // threeUnavailableRef is set true after ONE failed creation attempt (e.g. no WebGL2)
+  // so it is never retried every frame -- the session simply stays on the 2D path.
+  // loaded3dAssetRef holds the currently-selected item's loaded 3D asset, or null when
+  // the current item has none (the common case today -- 2D fallback applies). The two
+  // scratch canvases mirror occlusionScratchCanvasRef/occlusionEraseCanvasRef's own
+  // existing "reused, resized only when needed" convention, kept separate from those
+  // so the (unmodified) 2D occlusion path and the new 3D compositing path never fight
+  // over the same buffer.
+  const threeRuntimeRef = useRef<ThreeLiveRuntime | null>(null);
+  const threeUnavailableRef = useRef(false);
+  const loaded3dAssetRef = useRef<Live3dJewelleryAsset | null>(null);
+  const three3dCompositeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const three3dEraseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const assetGeometryRef = useRef<LoadedJewelleryTexture | null>(null);
   // Keyed by jewelleryId -- one loaded texture per additionally-layered neck item. Read
   // fresh every frame inside the render loop (never restarts it), updated by the
@@ -353,6 +393,10 @@ export function useLiveArSession({
   const [segmentationStatus, setSegmentationStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [segmentationError, setSegmentationError] = useState<string | null>(null);
   const [occlusionDebugInfo, setOcclusionDebugInfo] = useState<UseLiveArSessionResult["occlusionDebugInfo"]>(null);
+  // Phase E Step 21: generic 3D debug info -- null whenever no 3D asset is active for
+  // the current item this frame (the common case), never a stale leftover value.
+  const [live3dDebugInfo, setLive3dDebugInfo] = useState<UseLiveArSessionResult["live3dDebugInfo"]>(null);
+  const lastLive3dDebugStateUpdateAtMsRef = useRef<number>(0);
   const lastDebugStateUpdateAtMsRef = useRef<number>(0);
   const lastOcclusionDebugStateUpdateAtMsRef = useRef<number>(0);
   const debugEnabledRef = useRef(debugEnabled);
@@ -400,6 +444,19 @@ export function useLiveArSession({
       cancelled = true;
       stopLiveCamera(streamRef.current);
       streamRef.current = null;
+    };
+  }, []);
+
+  // Phase E: dispose the persistent 3D runtime only when the session itself ends
+  // (component unmount), never on a category/item change -- mirrors
+  // disposeThreeRenderer's own "call when the Live AR session ends entirely, never
+  // per jewellery-selection change" contract.
+  useEffect(() => {
+    return () => {
+      if (threeRuntimeRef.current) {
+        disposeThreeLiveRuntime(threeRuntimeRef.current);
+        threeRuntimeRef.current = null;
+      }
     };
   }, []);
 
@@ -490,6 +547,34 @@ export function useLiveArSession({
       cancelled = true;
     };
   }, [asset, category, primaryCategorySlug, primaryPhysicalWidthMm]);
+
+  // Phase E: load (or reuse cached) the PRIMARY item's 3D asset, if the generic
+  // registry (three-live-bridge.ts) has one -- same "never per frame" discipline as
+  // the 2D texture effect above, and completely independent of it: this resolves to
+  // null for the overwhelming majority of items (no 3D asset yet), which the render
+  // loop below treats identically to "no gltf3dAsset" (2D fallback, Step 2).
+  useEffect(() => {
+    let cancelled = false;
+    if (!jewelleryId) {
+      loaded3dAssetRef.current = null;
+      return;
+    }
+    loadLive3dJewelleryAsset(jewelleryId)
+      .then((loaded3d) => {
+        if (cancelled) return;
+        loaded3dAssetRef.current = loaded3d;
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Best-effort, same convention as the additional-layered-items loader below:
+        // a failed 3D load simply falls back to 2D for this item, never breaks the
+        // session (Step 25 item 15: "failed GLB loading fallback").
+        loaded3dAssetRef.current = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jewelleryId]);
 
   // Same texture-loading pattern as the primary asset above, for each additionally
   // layered item. Keyed on a stable string derived from (id, preview_url) pairs rather
@@ -693,6 +778,127 @@ export function useLiveArSession({
       }
       const t2 = performance.now();
 
+      // Phase E: the generic 3D bridge. Only ever considered for the PRIMARY
+      // necklace overlay (same scoping as the 2D occlusion block below, and for the
+      // same reason -- this phase's own stop condition validates necklace/choker
+      // first). Resolves to null (falls back to the existing 2D sprite, unconditionally)
+      // whenever: the current item has no registered 3D asset, its attachmentType
+      // isn't one this runtime tracks live yet, tracking itself is lost this frame, or
+      // no WebGL2 context is available -- never a silent partial render.
+      let occluded3dCanvas: HTMLCanvasElement | null = null;
+      let live3dInfoThisFrame: UseLiveArSessionResult["live3dDebugInfo"] = null;
+      if (category === "necklace" && loaded && overlays.length > 0) {
+        const primaryOverlay = overlays[0];
+        const asset3d = loaded3dAssetRef.current;
+        const trackedCategoryFor3d = asset3d ? attachmentTypeToTrackedCategory(asset3d.metadata.attachmentType) : null;
+        if (asset3d && trackedCategoryFor3d === "necklace") {
+          if (!threeRuntimeRef.current && !threeUnavailableRef.current) {
+            try {
+              threeRuntimeRef.current = createThreeLiveRuntime();
+            } catch {
+              threeUnavailableRef.current = true;
+            }
+          }
+          const runtime = threeRuntimeRef.current;
+          if (runtime) {
+            const renderedCanvas = renderLive3dFrame(runtime, asset3d, primaryOverlay.transform, loaded.geometry, yawAsymmetry, videoWidthPx, videoHeightPx);
+            if (renderedCanvas) {
+              // Reuse the EXISTING category-level occlusion mask machinery
+              // (computeNecklaceOcclusionMask/buildOcclusionEraseRgba, both
+              // unmodified) via compositeOccluded3dOverlay (built in M6.8, wired for
+              // the first time here). HONEST SIMPLIFICATION (docs/
+              // live-3d-jewellery-integration.md has the full account): this uses
+              // the COARSE category mask, not the 2D path's own finer jewellery-
+              // alpha-refined mask below (that refinement is specifically shaped
+              // around the 2D sprite's own alpha channel, not a 3D silhouette) --
+              // still a real, existing, unmodified occlusion mechanism, not a
+              // rewrite and not a fabricated one.
+              const maskAgeMs3d = segmentationSchedulerRef.current.getLatestAgeMs(frameStartMs);
+              const stale3d = isMaskStale(maskAgeMs3d, OCCLUSION_STALE_MASK_THRESHOLD_MS);
+              const latestMask3d = segmentationSchedulerRef.current.getLatest();
+
+              if (!three3dCompositeCanvasRef.current) three3dCompositeCanvasRef.current = document.createElement("canvas");
+              const compositeCanvas = three3dCompositeCanvasRef.current;
+              if (compositeCanvas.width !== videoWidthPx || compositeCanvas.height !== videoHeightPx) {
+                compositeCanvas.width = videoWidthPx;
+                compositeCanvas.height = videoHeightPx;
+              }
+              const compositeCtx = compositeCanvas.getContext("2d");
+
+              if (compositeCtx && !stale3d && latestMask3d) {
+                const bboxPx3d = computeTransformedBoundingBox(primaryOverlay.transform, loaded.geometry);
+                const region3d = toMaskSpaceRegion(
+                  bboxPx3d,
+                  primaryOverlay.transform.anchorPx.y,
+                  videoWidthPx,
+                  videoHeightPx,
+                  latestMask3d.maskWidthPx,
+                  latestMask3d.maskHeightPx
+                );
+                const categoryMask3d = computeNecklaceOcclusionMask(latestMask3d.categoryData, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx, region3d);
+
+                if (!three3dEraseCanvasRef.current) three3dEraseCanvasRef.current = document.createElement("canvas");
+                const eraseCanvas3d = three3dEraseCanvasRef.current;
+                if (eraseCanvas3d.width !== latestMask3d.maskWidthPx || eraseCanvas3d.height !== latestMask3d.maskHeightPx) {
+                  eraseCanvas3d.width = latestMask3d.maskWidthPx;
+                  eraseCanvas3d.height = latestMask3d.maskHeightPx;
+                }
+                const eraseCtx3d = eraseCanvas3d.getContext("2d");
+                if (eraseCtx3d) {
+                  const eraseRgba3d = buildOcclusionEraseRgba(categoryMask3d);
+                  eraseCtx3d.putImageData(
+                    new ImageData(eraseRgba3d as Uint8ClampedArray<ArrayBuffer>, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx),
+                    0,
+                    0
+                  );
+                  compositeOccluded3dOverlay(
+                    compositeCtx,
+                    renderedCanvas,
+                    primaryOverlay.opacity,
+                    eraseCanvas3d,
+                    latestMask3d.maskWidthPx,
+                    latestMask3d.maskHeightPx,
+                    videoWidthPx,
+                    videoHeightPx
+                  );
+                  occluded3dCanvas = compositeCanvas;
+                }
+              } else if (compositeCtx) {
+                // Stale/missing mask -- same "no occlusion" fallback the 2D path
+                // uses (M6.4 Step 13), never a stale/incorrect erase pattern.
+                compositeCtx.clearRect(0, 0, videoWidthPx, videoHeightPx);
+                compositeCtx.save();
+                compositeCtx.globalAlpha = Math.max(0, Math.min(1, primaryOverlay.opacity));
+                compositeCtx.drawImage(renderedCanvas, 0, 0);
+                compositeCtx.restore();
+                occluded3dCanvas = compositeCanvas;
+              }
+
+              const stats = getThreeRenderStats(runtime.renderer.info);
+              live3dInfoThisFrame = {
+                status: "rendered",
+                jewelleryId,
+                attachmentType: asset3d.metadata.attachmentType,
+                transform: {
+                  positionMm: { x: runtime.currentInstance?.position.x ?? 0, y: runtime.currentInstance?.position.y ?? 0, z: runtime.currentInstance?.position.z ?? 0 },
+                  scale: runtime.currentInstance?.scale.x ?? 0,
+                  yawAsymmetry,
+                },
+                stats,
+              };
+            } else {
+              live3dInfoThisFrame = { status: "error", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, stats: null };
+            }
+          } else if (threeUnavailableRef.current) {
+            live3dInfoThisFrame = { status: "webgl_unavailable", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, stats: null };
+          }
+        }
+      }
+      if (frameStartMs - lastLive3dDebugStateUpdateAtMsRef.current >= DEBUG_SNAPSHOT_STATE_THROTTLE_MS) {
+        lastLive3dDebugStateUpdateAtMsRef.current = frameStartMs;
+        setLive3dDebugInfo(live3dInfoThisFrame);
+      }
+
       // M6.4 (docs/live-ar-realism-architecture.md §6/§7/§17): segmentation-aware
       // necklace occlusion. Applies ONLY to the primary necklace overlay (overlays[0]
       // when category === "necklace" -- the necklace slot is always constructed first
@@ -706,10 +912,15 @@ export function useLiveArSession({
       // (see the flatMap above -- `if (result.transform === null ...) return []`), so
       // this whole block is naturally skipped then, exactly as if occlusion were
       // "disabled" -- there is nothing to occlude.
+      //
+      // Phase E: skipped entirely when the 3D path already produced this frame's
+      // primary overlay (occluded3dCanvas above) -- its result would only be thrown
+      // away in the final draw step below, so computing it at all would be pure
+      // waste (Step 20: "no unnecessary allocations per frame").
       let occlusionMs: number | null = null;
       let alphaMaskMs: number | null = null;
       let occludedNecklaceCanvas: HTMLCanvasElement | null = null;
-      if (category === "necklace" && loaded && overlays.length > 0) {
+      if (category === "necklace" && loaded && overlays.length > 0 && !occluded3dCanvas) {
         const necklaceOverlay = overlays[0];
         const maskAgeMs = segmentationSchedulerRef.current.getLatestAgeMs(frameStartMs);
         const stale = isMaskStale(maskAgeMs, OCCLUSION_STALE_MASK_THRESHOLD_MS);
@@ -992,11 +1203,17 @@ export function useLiveArSession({
 
       renderLiveFrame(ctx, { video, videoWidthPx, videoHeightPx }, null);
       overlays.forEach((overlay, index) => {
-        // The primary necklace overlay is drawn from the occlusion-composited
-        // offscreen canvas when occlusion actually ran this frame; every other
-        // overlay (earrings, additional layered neck items, or the necklace itself
-        // when occlusion did NOT run) draws exactly as it did before M6.4.
-        if (index === 0 && occludedNecklaceCanvas) {
+        // Phase E: the primary overlay draws from the 3D composite whenever the 3D
+        // path actually produced one this frame (a real GLB, generically resolved --
+        // see three-live-bridge.ts) -- this is the ONLY place "3D vs 2D" is decided
+        // for what actually reaches the screen, and it is a plain null-check, not an
+        // item-specific branch. Otherwise: the primary necklace overlay draws from
+        // the occlusion-composited offscreen canvas when 2D occlusion ran this frame;
+        // every other overlay (earrings, additional layered neck items, or the
+        // necklace itself when neither ran) draws exactly as it did before M6.4/E.
+        if (index === 0 && occluded3dCanvas) {
+          ctx.drawImage(occluded3dCanvas, 0, 0);
+        } else if (index === 0 && occludedNecklaceCanvas) {
           ctx.drawImage(occludedNecklaceCanvas, 0, 0);
         } else {
           drawJewelleryOverlay(ctx, overlay.image, overlay.transform, overlay.opacity, overlay.strips, overlay.horizontalForeshorten);
@@ -1163,6 +1380,7 @@ export function useLiveArSession({
     segmentationStatus,
     segmentationError,
     occlusionDebugInfo,
+    live3dDebugInfo,
     finalVisibilityMaskCanvasRef,
     jewelleryAlphaDebugCanvasRef,
     wearComparisonCanvasRef,
