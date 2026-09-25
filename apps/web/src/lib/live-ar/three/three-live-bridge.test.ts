@@ -14,6 +14,7 @@ import {
   loadLive3dAssetFromMetadata,
   loadLive3dJewelleryAsset,
   resolveGltf3dAssetMetadata,
+  resolveProceduralPrototypeMetadata,
   type Live3dJewelleryAsset,
 } from "@/lib/live-ar/three/three-live-bridge";
 import { buildCameraConfig } from "@/lib/live-ar/three/three-camera";
@@ -59,17 +60,32 @@ const FIXTURE_ASSET_GEOMETRY: JewelleryAssetGeometry = {
   physicalWidthMm: 190,
 };
 
-describe("resolveGltf3dAssetMetadata", () => {
-  it("resolves the real, registered Diamond Choker id", () => {
-    const metadata = resolveGltf3dAssetMetadata(DIAMOND_CHOKER_ID);
-    expect(metadata).not.toBeNull();
-    expect(metadata!.attachmentType).toBe("neck_choker");
-    expect(metadata!.modelFormat).toBe("glb");
+describe("resolveGltf3dAssetMetadata (the CUSTOMER-FACING resolver)", () => {
+  it("Phase H restoration: Diamond Choker's procedural prototype is registered but NOT production-verified -- the customer path correctly falls back to the original 2D asset (docs/diamond-choker-asset-restoration.md)", () => {
+    expect(resolveGltf3dAssetMetadata(DIAMOND_CHOKER_ID)).toBeNull();
   });
 
   it("returns null for any unregistered id -- the generic 2D-fallback signal", () => {
     expect(resolveGltf3dAssetMetadata("some-other-jewellery-id")).toBeNull();
     expect(resolveGltf3dAssetMetadata("")).toBeNull();
+  });
+
+  it("today, NO item resolves to a customer-facing 3D asset -- a generic fact, not a Diamond-Choker-specific carve-out", () => {
+    expect(resolveGltf3dAssetMetadata(DIAMOND_CHOKER_ID)).toBeNull();
+    expect(resolveGltf3dAssetMetadata("any-other-real-vault-id")).toBeNull();
+  });
+});
+
+describe("resolveProceduralPrototypeMetadata (dev/test-only -- Phase D/E/F/G's own infrastructure, fully preserved)", () => {
+  it("still resolves the real, registered Diamond Choker procedural prototype -- proving the generator/pipeline work is preserved, not deleted", () => {
+    const metadata = resolveProceduralPrototypeMetadata(DIAMOND_CHOKER_ID);
+    expect(metadata).not.toBeNull();
+    expect(metadata!.attachmentType).toBe("neck_choker");
+    expect(metadata!.modelFormat).toBe("glb");
+  });
+
+  it("returns null for any unregistered id, same as the customer-facing resolver", () => {
+    expect(resolveProceduralPrototypeMetadata("some-other-jewellery-id")).toBeNull();
   });
 });
 
