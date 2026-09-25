@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeNecklaceDebugSnapshot, formatNecklaceDebugSnapshot, type WearGeometryDebugInput } from "@/lib/live-ar/debug";
+import { computeNecklaceDebugSnapshot, formatLive3dDebugInfo, formatNecklaceDebugSnapshot, type Live3dDebugInfoInput, type WearGeometryDebugInput } from "@/lib/live-ar/debug";
 import type { JewelleryAssetGeometry, LiveFaceLandmarks, LivePoseLandmarks, LiveTransform, NormalizedPoint } from "@/lib/live-ar/types";
 
 const IMAGE_W = 1000;
@@ -219,5 +219,42 @@ describe("formatNecklaceDebugSnapshot", () => {
     expect(text).toContain("DEPTH");
     expect(text).toContain("WEAR GEOMETRY");
     expect(text).not.toContain("[object Object]");
+  });
+});
+
+describe("formatLive3dDebugInfo", () => {
+  it("reports 'none' when no 3D/2.5D asset is active this frame (the flat-2D sprite is on screen)", () => {
+    expect(formatLive3dDebugInfo(null)).toBe("3D/2.5D: none (flat-2D sprite active)");
+  });
+
+  it("reports the representation mode and attachment type for a rendered curved-2.5D frame", () => {
+    const info: Live3dDebugInfoInput = {
+      status: "rendered",
+      jewelleryId: "b68b76b3-55ba-4808-869c-4d8266f7aff7",
+      attachmentType: "neck_choker",
+      representationMode: "curved-2.5d",
+      transform: { positionMm: { x: 1, y: 2, z: -300 }, scale: 0.95 },
+      orientation: { yawDegrees: 5, pitchDegrees: -2, rollDegrees: 0, confidence: 0.9, method: "shoulder_roll_plus_real_facial_transform_matrix" },
+    };
+    const text = formatLive3dDebugInfo(info);
+    expect(text).toContain("status=rendered");
+    expect(text).toContain("mode=curved-2.5d");
+    expect(text).toContain("attachmentType=neck_choker");
+    expect(text).toContain("scale=0.950");
+    expect(text).not.toContain("[object Object]");
+  });
+
+  it("reports a gltf-3d frame with no orientation/transform (e.g. webgl_unavailable) without throwing", () => {
+    const info: Live3dDebugInfoInput = {
+      status: "webgl_unavailable",
+      jewelleryId: "some-id",
+      attachmentType: "neck_choker",
+      representationMode: "gltf-3d",
+      transform: null,
+      orientation: null,
+    };
+    const text = formatLive3dDebugInfo(info);
+    expect(text).toContain("mode=gltf-3d");
+    expect(text).toContain("status=webgl_unavailable");
   });
 });

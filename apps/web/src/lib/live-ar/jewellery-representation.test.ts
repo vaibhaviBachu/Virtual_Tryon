@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveJewelleryRepresentation } from "@/lib/live-ar/jewellery-representation";
-import type { Gltf3dAssetMetadata } from "@/lib/live-ar/jewellery-representation";
+import type { Curved25dAssetMetadata, Gltf3dAssetMetadata } from "@/lib/live-ar/jewellery-representation";
 import type { JewelleryAssetGeometry } from "@/lib/live-ar/types";
 
 function fakeGeometry(): JewelleryAssetGeometry {
@@ -38,11 +38,30 @@ function fakeGltf3dAsset(overrides: Partial<Gltf3dAssetMetadata> = {}): Gltf3dAs
   };
 }
 
+function fakeCurved25dAsset(overrides: Partial<Curved25dAssetMetadata> = {}): Curved25dAssetMetadata {
+  return {
+    attachmentType: "neck_choker",
+    physicalWidthMm: 190,
+    physicalHeightMm: 106,
+    physicalDepthMm: 12,
+    curveControlPointsMm: [
+      { x: -95, y: 0, z: -18 },
+      { x: 0, y: 0, z: 0 },
+      { x: 95, y: 0, z: -18 },
+    ],
+    curveClosed: false,
+    mirrorable: false,
+    productionVerified: true,
+    ...overrides,
+  };
+}
+
 describe("resolveJewelleryRepresentation", () => {
   it("falls back to flat-2d when nothing else is available (today's ONLY real catalogue state)", () => {
     const result = resolveJewelleryRepresentation({ flatAsset: fakeFlatAsset() });
     expect(result.type).toBe("flat-2d");
     expect(result.gltf3dAsset).toBeNull();
+    expect(result.curved25dAsset).toBeNull();
     expect(result.layeredAssetUrls).toBeNull();
     expect(result.flatAsset).not.toBeNull();
   });
@@ -77,6 +96,51 @@ describe("resolveJewelleryRepresentation", () => {
       layeredAssetUrls: ["front.png", "left.png"],
     });
     expect(result.type).toBe("gltf-3d");
+  });
+
+  it("selects curved-2.5d when a production-verified curved asset is present and no glTF asset is", () => {
+    const curved25dAsset = fakeCurved25dAsset();
+    const result = resolveJewelleryRepresentation({ flatAsset: fakeFlatAsset(), curved25dAsset });
+    expect(result.type).toBe("curved-2.5d");
+    expect(result.curved25dAsset).toBe(curved25dAsset);
+    expect(result.gltf3dAsset).toBeNull();
+  });
+
+  it("prefers gltf-3d over curved-2.5d when both are present (richer representation wins)", () => {
+    const result = resolveJewelleryRepresentation({
+      flatAsset: fakeFlatAsset(),
+      gltf3dAsset: fakeGltf3dAsset(),
+      curved25dAsset: fakeCurved25dAsset(),
+    });
+    expect(result.type).toBe("gltf-3d");
+    expect(result.curved25dAsset).toBeNull();
+  });
+
+  it("prefers curved-2.5d over layered-2.5d when both are present and no glTF asset is", () => {
+    const result = resolveJewelleryRepresentation({
+      flatAsset: fakeFlatAsset(),
+      curved25dAsset: fakeCurved25dAsset(),
+      layeredAssetUrls: ["front.png"],
+    });
+    expect(result.type).toBe("curved-2.5d");
+  });
+
+  it("treats an UNVERIFIED curved25dAsset exactly like no curved25dAsset at all -- same discipline as gltf3dAsset", () => {
+    const result = resolveJewelleryRepresentation({
+      flatAsset: fakeFlatAsset(),
+      curved25dAsset: fakeCurved25dAsset({ productionVerified: false }),
+    });
+    expect(result.type).toBe("flat-2d");
+    expect(result.curved25dAsset).toBeNull();
+  });
+
+  it("an unverified curved25dAsset still falls back correctly to layered-2.5d when that's also present", () => {
+    const result = resolveJewelleryRepresentation({
+      flatAsset: fakeFlatAsset(),
+      curved25dAsset: fakeCurved25dAsset({ productionVerified: false }),
+      layeredAssetUrls: ["front.png"],
+    });
+    expect(result.type).toBe("layered-2.5d");
   });
 
   it("carries the flat 2D asset through UNCHANGED regardless of which representation is selected -- the existing PNG renderer must always have a fallback available (spec Step 18)", () => {

@@ -267,3 +267,35 @@ export function computeNecklaceDebugSnapshot(
     horizontalForeshorten: wearDebug?.horizontalForeshorten ?? null,
   };
 }
+
+/** Structural (not imported) match for `UseLiveArSessionResult["live3dDebugInfo"]`
+ * -- deliberately not imported from useLiveArSession.ts, which already imports FROM
+ * this module (would be a backwards/circular dependency). */
+export interface Live3dDebugInfoInput {
+  status: "none" | "loading" | "error" | "webgl_unavailable" | "rendered";
+  jewelleryId: string | null;
+  attachmentType: string | null;
+  representationMode: "gltf-3d" | "curved-2.5d" | null;
+  transform: { positionMm: { x: number; y: number; z: number }; scale: number } | null;
+  orientation: { yawDegrees: number; pitchDegrees: number; rollDegrees: number; confidence: number; method: string } | null;
+}
+
+/** Phase 2.5D Step 21: plain-text rendering of the generic 3D/2.5D debug info --
+ * mirrors `formatNecklaceDebugSnapshot`'s own convention (a readable, copy-pasteable
+ * report of exactly what this frame's render actually did), never estimated. `null`
+ * means no 3D/2.5D asset is active this frame -- the flat-2D sprite is on screen. */
+export function formatLive3dDebugInfo(info: Live3dDebugInfoInput | null): string {
+  if (!info) return "3D/2.5D: none (flat-2D sprite active)";
+  const lines = [`3D/2.5D: status=${info.status}  mode=${info.representationMode ?? "null"}  attachmentType=${info.attachmentType ?? "null"}`];
+  if (info.transform) {
+    const { positionMm, scale } = info.transform;
+    lines.push(`  position(mm)=(${positionMm.x.toFixed(1)}, ${positionMm.y.toFixed(1)}, ${positionMm.z.toFixed(1)})  scale=${scale.toFixed(3)}`);
+  }
+  if (info.orientation) {
+    const { yawDegrees, pitchDegrees, rollDegrees, confidence, method } = info.orientation;
+    lines.push(
+      `  yaw=${yawDegrees.toFixed(1)}deg  pitch=${pitchDegrees.toFixed(1)}deg  roll=${rollDegrees.toFixed(1)}deg  confidence=${confidence.toFixed(2)}  method=${method}`
+    );
+  }
+  return lines.join("\n");
+}

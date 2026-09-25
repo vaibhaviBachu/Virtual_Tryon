@@ -373,21 +373,76 @@ export function computeSurfaceAttachedTransform(
   cameraConfig: ThreeCameraConfig
 ): ThreeJewelleryTransform | null {
   if (asset.metadata.physicalWidthMm === null) return null;
+  return computeSurfaceAttachedTransformFromDimensions(
+    smoothed,
+    asset.metadata.physicalWidthMm,
+    asset.metadata.physicalDepthMm,
+    asset.boundingBoxWidthMm,
+    assetGeometry,
+    orientation,
+    viewportWidthPx,
+    viewportHeightPx,
+    cameraConfig
+  );
+}
+
+/**
+ * Phase 2.5D (docs/2-5d-jewellery-surface-attachment.md): the same transform math
+ * above, extracted to its real inputs (three plain numbers) rather than a
+ * `Live3dJewelleryAsset` specifically -- so the curved-2.5d ribbon path
+ * (`curved-2_5d-bridge.ts`), which has no loaded GLB and therefore no
+ * `Live3dJewelleryAsset`, can reuse the EXACT SAME position/orientation/scale
+ * derivation instead of a second, parallel implementation. `boundingBoxWidthMm`
+ * is whichever mesh's own authored width applies -- for a GLB, the loaded asset's
+ * measured bounding box (unchanged); for a curved ribbon, its own authored
+ * `physicalWidthMm` (since the ribbon is built AT that exact width already --
+ * see `curved-2_5d-bridge.ts`'s own doc comment on why its "authored" and
+ * "physical" width are the same number by construction, making this call a
+ * no-op rescale of 1.0, which is correct, not a bug).
+ */
+export function computeSurfaceAttachedTransformFromDimensions(
+  smoothed: LiveTransform,
+  physicalWidthMm: number | null,
+  physicalDepthMm: number | null,
+  boundingBoxWidthMm: number,
+  assetGeometry: JewelleryAssetGeometry,
+  orientation: SurfaceOrientation,
+  viewportWidthPx: number,
+  viewportHeightPx: number,
+  cameraConfig: ThreeCameraConfig
+): ThreeJewelleryTransform | null {
+  if (physicalWidthMm === null) return null;
   const scale = deriveScaleResultFromSmoothedTransform(smoothed, assetGeometry);
   if (!scale.success || scale.targetWidthPx === null) return null;
 
-  const depthMm = computeVirtualDepthMm(asset.metadata.physicalWidthMm, scale.targetWidthPx, viewportHeightPx, cameraConfig.verticalFovDegrees);
+  const depthMm = computeVirtualDepthMm(physicalWidthMm, scale.targetWidthPx, viewportHeightPx, cameraConfig.verticalFovDegrees);
   const basePositionMm = unprojectScreenPointAtDepth(smoothed.anchorPx, viewportWidthPx, viewportHeightPx, depthMm, cameraConfig);
   const quaternion = composeJewelleryQuaternionFromEuler(orientation.yawRadians, orientation.pitchRadians, orientation.rollRadians);
 
-  const halfDepthMm = (asset.metadata.physicalDepthMm ?? 0) / 2;
+  const halfDepthMm = (physicalDepthMm ?? 0) / 2;
   const localForward = new THREE.Vector3(0, 0, halfDepthMm).applyQuaternion(new THREE.Quaternion(quaternion[0], quaternion[1], quaternion[2], quaternion[3]));
 
   return {
     positionMm: { x: basePositionMm.x + localForward.x, y: basePositionMm.y + localForward.y, z: basePositionMm.z + localForward.z },
     quaternion,
-    scale: computeMeshScaleFactor(asset.metadata.physicalWidthMm, asset.boundingBoxWidthMm),
+    scale: computeMeshScaleFactor(physicalWidthMm, boundingBoxWidthMm),
   };
+}
+
+/**
+ * Phase 2.5D: the shared "position this instance, render one frame, return the
+ * canvas" core -- factored out so `curved-2_5d-bridge.ts` (which positions a
+ * curved-ribbon `THREE.Group`, not a loaded GLB) reuses the exact same WebGL2/
+ * renderer plumbing as the GLB path, never a second implementation. Callers that
+ * already have a computed `ThreeJewelleryTransform` (from either
+ * `computeSurfaceAttachedTransform` or `computeSurfaceAttachedTransformFromDimensions`)
+ * call this directly.
+ */
+export function renderInstanceWithTransform(runtime: ThreeLiveRuntime, instance: THREE.Group, transform: ThreeJewelleryTransform): HTMLCanvasElement {
+  ensureInstanceInScene(runtime, instance);
+  applyLive3dTransform(instance, transform);
+  renderThreeFrame(runtime.renderer, runtime.scene, runtime.camera);
+  return runtime.canvas;
 }
 
 /**
@@ -412,8 +467,5 @@ export function renderSurfaceAttachedFrame(
   const cameraConfig = buildCameraConfig(viewportWidthPx, viewportHeightPx);
   const transform = computeSurfaceAttachedTransform(smoothed, asset, assetGeometry, orientation, viewportWidthPx, viewportHeightPx, cameraConfig);
   if (!transform) return null;
-  ensureInstanceInScene(runtime, asset.instance);
-  applyLive3dTransform(asset.instance, transform);
-  renderThreeFrame(runtime.renderer, runtime.scene, runtime.camera);
-  return runtime.canvas;
+  return renderInstanceWithTransform(runtime, asset.instance, transform);
 }

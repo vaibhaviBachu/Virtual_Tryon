@@ -50,6 +50,12 @@ import {
 import { buildSegmentationDebugRgba, createLiveSegmenter, runSegmentation, SegmentationCadenceScheduler, type LiveSegmenter } from "@/lib/live-ar/segmentation";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
 import { resolveAttachmentOrientation } from "@/lib/live-ar/three/body-attachment";
+import {
+  buildCurved25dAsset,
+  renderCurved25dFrame,
+  resolveCurved25dAssetMetadata,
+  type Live25dJewelleryAsset,
+} from "@/lib/live-ar/three/curved-2_5d-bridge";
 import { computeNeckSurfaceFrame, derivePxPerMm, neckSurfacePointAt, type NeckSurfaceFrame } from "@/lib/live-ar/three/neck-surface-3d";
 import {
   attachmentTypeToTrackedCategory,
@@ -124,6 +130,93 @@ function smoothTransform(smoother: TransformSmoother, transform: LiveTransform, 
     sourceAnchorPx: transform.sourceAnchorPx,
     mirrored: transform.mirrored,
   };
+}
+
+/**
+ * Phase G Step 13/14, extracted for Phase 2.5D reuse (docs/2-5d-jewellery-surface-
+ * attachment.md): composites an already-rendered, transparent-background 3D/2.5D
+ * canvas onto the EXISTING segmentation-aware occlusion machinery. Generic over
+ * WHICH representation produced `renderedCanvas` -- the procedural GLB (Phase E-G)
+ * or the curved-2.5D textured mesh (this phase): both are plain `HTMLCanvasElement`s
+ * with real alpha, and refining the coarse category mask with that alpha / building
+ * the erase pattern / compositing has never depended on how those pixels were
+ * produced. Callers reuse the SAME scratch-canvas refs for both representations --
+ * safe because at most one is ever active for a given item at a time (the render
+ * loop's own gltf-3d > curved-2.5d priority), never a second allocation.
+ */
+function compositeRendered3dFrame(
+  renderedCanvas: HTMLCanvasElement,
+  transform: LiveTransform,
+  opacity: number,
+  geometry: JewelleryAssetGeometry,
+  videoWidthPx: number,
+  videoHeightPx: number,
+  frameStartMs: number,
+  scheduler: SegmentationCadenceScheduler,
+  compositeCanvasRef: { current: HTMLCanvasElement | null },
+  alphaScratchCanvasRef: { current: HTMLCanvasElement | null },
+  eraseCanvasRef: { current: HTMLCanvasElement | null }
+): HTMLCanvasElement | null {
+  const maskAgeMs3d = scheduler.getLatestAgeMs(frameStartMs);
+  const stale3d = isMaskStale(maskAgeMs3d, OCCLUSION_STALE_MASK_THRESHOLD_MS);
+  const latestMask3d = scheduler.getLatest();
+
+  if (!compositeCanvasRef.current) compositeCanvasRef.current = document.createElement("canvas");
+  const compositeCanvas = compositeCanvasRef.current;
+  if (compositeCanvas.width !== videoWidthPx || compositeCanvas.height !== videoHeightPx) {
+    compositeCanvas.width = videoWidthPx;
+    compositeCanvas.height = videoHeightPx;
+  }
+  const compositeCtx = compositeCanvas.getContext("2d");
+  if (!compositeCtx) return null;
+
+  if (!stale3d && latestMask3d) {
+    const bboxPx3d = computeTransformedBoundingBox(transform, geometry);
+    const region3d = toMaskSpaceRegion(bboxPx3d, transform.anchorPx.y, videoWidthPx, videoHeightPx, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+    const categoryMask3d = computeNecklaceOcclusionMask(latestMask3d.categoryData, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx, region3d);
+
+    // Phase G Step 13/14: refine using the render's OWN real alpha, not just the
+    // coarse category rule. `renderedCanvas` is already full-video-sized, so
+    // downscaling it directly to the mask's resolution needs no region/crop math.
+    let occlusionMask3d = categoryMask3d;
+    if (!alphaScratchCanvasRef.current) alphaScratchCanvasRef.current = document.createElement("canvas");
+    const alphaScratchCanvas3d = alphaScratchCanvasRef.current;
+    if (alphaScratchCanvas3d.width !== latestMask3d.maskWidthPx || alphaScratchCanvas3d.height !== latestMask3d.maskHeightPx) {
+      alphaScratchCanvas3d.width = latestMask3d.maskWidthPx;
+      alphaScratchCanvas3d.height = latestMask3d.maskHeightPx;
+    }
+    const alphaScratchCtx3d = alphaScratchCanvas3d.getContext("2d");
+    if (alphaScratchCtx3d) {
+      alphaScratchCtx3d.clearRect(0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+      alphaScratchCtx3d.drawImage(renderedCanvas, 0, 0, videoWidthPx, videoHeightPx, 0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+      const { data: renderedRgba3d } = alphaScratchCtx3d.getImageData(0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
+      const renderedAlpha3d = new Uint8ClampedArray(latestMask3d.maskWidthPx * latestMask3d.maskHeightPx);
+      for (let i = 0; i < renderedAlpha3d.length; i++) renderedAlpha3d[i] = renderedRgba3d[i * 4 + 3];
+      occlusionMask3d = applyRenderedAlphaToOcclusionMask(categoryMask3d, renderedAlpha3d);
+    }
+
+    if (!eraseCanvasRef.current) eraseCanvasRef.current = document.createElement("canvas");
+    const eraseCanvas3d = eraseCanvasRef.current;
+    if (eraseCanvas3d.width !== latestMask3d.maskWidthPx || eraseCanvas3d.height !== latestMask3d.maskHeightPx) {
+      eraseCanvas3d.width = latestMask3d.maskWidthPx;
+      eraseCanvas3d.height = latestMask3d.maskHeightPx;
+    }
+    const eraseCtx3d = eraseCanvas3d.getContext("2d");
+    if (!eraseCtx3d) return null;
+    const eraseRgba3d = buildOcclusionEraseRgba(occlusionMask3d);
+    eraseCtx3d.putImageData(new ImageData(eraseRgba3d as Uint8ClampedArray<ArrayBuffer>, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx), 0, 0);
+    compositeOccluded3dOverlay(compositeCtx, renderedCanvas, opacity, eraseCanvas3d, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx, videoWidthPx, videoHeightPx);
+    return compositeCanvas;
+  }
+
+  // Stale/missing mask -- same "no occlusion" fallback the 2D path uses (M6.4 Step
+  // 13), never a stale/incorrect erase pattern.
+  compositeCtx.clearRect(0, 0, videoWidthPx, videoHeightPx);
+  compositeCtx.save();
+  compositeCtx.globalAlpha = Math.max(0, Math.min(1, opacity));
+  compositeCtx.drawImage(renderedCanvas, 0, 0);
+  compositeCtx.restore();
+  return compositeCanvas;
 }
 
 export interface UseLiveArSessionArgs {
@@ -267,6 +360,12 @@ export interface UseLiveArSessionResult {
     status: "none" | "loading" | "error" | "webgl_unavailable" | "rendered";
     jewelleryId: string | null;
     attachmentType: string | null;
+    /** Phase 2.5D Step 21: which representation actually produced this frame's
+     * render -- the procedural GLB (dev-only today, `productionVerified: false` for
+     * every real catalogue item) or the curved-textured-mesh path carrying the
+     * item's REAL artwork. Null exactly when `status` is `"none"` (no 3D/2.5D asset
+     * active this frame -- the flat-2D sprite is what's actually on screen). */
+    representationMode: "gltf-3d" | "curved-2.5d" | null;
     transform: { positionMm: { x: number; y: number; z: number }; scale: number } | null;
     /** Phase F (docs/true-body-surface-jewellery-attachment.md Step 14): the real
      * orientation actually applied this frame -- `method` distinguishes a real
@@ -380,6 +479,11 @@ export function useLiveArSession({
   const threeRuntimeRef = useRef<ThreeLiveRuntime | null>(null);
   const threeUnavailableRef = useRef(false);
   const loaded3dAssetRef = useRef<Live3dJewelleryAsset | null>(null);
+  // Phase 2.5D: the curved-textured-mesh asset for the currently-selected item, or
+  // null when none is registered/verified (the common case today -- only Diamond
+  // Choker has one). Independent of loaded3dAssetRef -- the render loop below
+  // decides priority (gltf-3d > curved-2.5d) at read time, never here.
+  const loadedCurved25dAssetRef = useRef<Live25dJewelleryAsset | null>(null);
   const three3dCompositeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const three3dEraseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   // Phase G Step 13/14: scratch canvas for downscaling the 3D render's OWN alpha to
@@ -592,6 +696,39 @@ export function useLiveArSession({
     };
   }, [jewelleryId]);
 
+  // Phase 2.5D: load (or reuse cached) the PRIMARY item's curved-2.5D asset, if the
+  // generic registry (curved-2_5d-bridge.ts) has a production-verified one -- same
+  // "never per frame" discipline as the GLTF loader above, and independent of it
+  // (the render loop decides priority). Reuses the SAME already-loaded/cached
+  // `HTMLImageElement` the flat-2D pipeline decoded (asset-cache.ts's own cache, keyed
+  // by asset id) -- never a second fetch/decode of the artwork.
+  useEffect(() => {
+    let cancelled = false;
+    if (!jewelleryId || !asset || !asset.preview_url) {
+      loadedCurved25dAssetRef.current = null;
+      return;
+    }
+    const metadata = resolveCurved25dAssetMetadata(jewelleryId);
+    if (!metadata) {
+      loadedCurved25dAssetRef.current = null;
+      return;
+    }
+    loadJewelleryAssetTexture(asset, asset.preview_url, primaryPhysicalWidthMm)
+      .then((loaded) => {
+        if (cancelled) return;
+        loadedCurved25dAssetRef.current = buildCurved25dAsset(metadata, loaded.image);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Best-effort, same convention as the GLTF/additional-layered-items loaders:
+        // a failed load simply falls back to flat-2D for this item.
+        loadedCurved25dAssetRef.current = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jewelleryId, asset, primaryPhysicalWidthMm]);
+
   // Same texture-loading pattern as the primary asset above, for each additionally
   // layered item. Keyed on a stable string derived from (id, preview_url) pairs rather
   // than the array itself, since the caller passes a freshly-built array every render.
@@ -794,13 +931,19 @@ export function useLiveArSession({
       }
       const t2 = performance.now();
 
-      // Phase E: the generic 3D bridge. Only ever considered for the PRIMARY
-      // necklace overlay (same scoping as the 2D occlusion block below, and for the
-      // same reason -- this phase's own stop condition validates necklace/choker
-      // first). Resolves to null (falls back to the existing 2D sprite, unconditionally)
-      // whenever: the current item has no registered 3D asset, its attachmentType
-      // isn't one this runtime tracks live yet, tracking itself is lost this frame, or
-      // no WebGL2 context is available -- never a silent partial render.
+      // Phase E / Phase 2.5D: the generic 3D/2.5D bridge. Only ever considered for
+      // the PRIMARY necklace overlay (same scoping as the 2D occlusion block below,
+      // and for the same reason -- this phase's own stop condition validates
+      // necklace/choker first). Resolves to null (falls back to the existing flat-2D
+      // sprite, unconditionally) whenever: the current item has no registered
+      // gltf-3d OR curved-2.5d asset, its attachmentType isn't one this runtime
+      // tracks live yet, tracking itself is lost this frame, or no WebGL2 context is
+      // available -- never a silent partial render. Priority when BOTH happen to be
+      // registered: gltf-3d wins (richer representation -- same rule
+      // jewellery-representation.ts's resolveJewelleryRepresentation enforces), but
+      // in practice today this is moot: the only production-verified gltf-3d entry
+      // was reverted to `productionVerified: false` (docs/diamond-choker-asset-
+      // restoration.md), so Diamond Choker resolves via curved-2.5d here.
       let occluded3dCanvas: HTMLCanvasElement | null = null;
       let live3dInfoThisFrame: UseLiveArSessionResult["live3dDebugInfo"] = null;
       // Phase G Step 15: 2D-projected neck-surface debug points, computed inside the
@@ -812,7 +955,12 @@ export function useLiveArSession({
         const primaryOverlay = overlays[0];
         const asset3d = loaded3dAssetRef.current;
         const trackedCategoryFor3d = asset3d ? attachmentTypeToTrackedCategory(asset3d.metadata.attachmentType) : null;
-        if (asset3d && trackedCategoryFor3d === "necklace") {
+        const curved25dAsset = loadedCurved25dAssetRef.current;
+        const trackedCategoryForCurved25d = curved25dAsset ? attachmentTypeToTrackedCategory(curved25dAsset.metadata.attachmentType) : null;
+        const activeGltf3d = asset3d && trackedCategoryFor3d === "necklace" ? asset3d : null;
+        const activeCurved25d = !activeGltf3d && curved25dAsset && trackedCategoryForCurved25d === "necklace" ? curved25dAsset : null;
+
+        if (activeGltf3d || activeCurved25d) {
           if (!threeRuntimeRef.current && !threeUnavailableRef.current) {
             try {
               threeRuntimeRef.current = createThreeLiveRuntime();
@@ -821,6 +969,9 @@ export function useLiveArSession({
             }
           }
           const runtime = threeRuntimeRef.current;
+          const representationMode: "gltf-3d" | "curved-2.5d" = activeGltf3d ? "gltf-3d" : "curved-2.5d";
+          const activeAttachmentType = activeGltf3d ? activeGltf3d.metadata.attachmentType : activeCurved25d!.metadata.attachmentType;
+          const activePhysicalWidthMm = activeGltf3d ? activeGltf3d.metadata.physicalWidthMm : activeCurved25d!.metadata.physicalWidthMm;
           if (runtime) {
             // Phase F (docs/true-body-surface-jewellery-attachment.md): a real 3D
             // orientation (yaw+pitch from MediaPipe's own facial transformation
@@ -834,7 +985,14 @@ export function useLiveArSession({
             // itself degrades gracefully to a neutral orientation when face/pose are
             // both null, see that function's own tests).
             const orientation = resolveAttachmentOrientation("necklace", face, pose, videoWidthPx, videoHeightPx)!;
-            const renderedCanvas = renderSurfaceAttachedFrame(runtime, asset3d, primaryOverlay.transform, loaded.geometry, orientation, videoWidthPx, videoHeightPx);
+            let renderedCanvas: HTMLCanvasElement | null;
+            if (activeGltf3d) {
+              renderedCanvas = renderSurfaceAttachedFrame(runtime, activeGltf3d, primaryOverlay.transform, loaded.geometry, orientation, videoWidthPx, videoHeightPx);
+            } else if (activeCurved25d) {
+              renderedCanvas = renderCurved25dFrame(runtime, activeCurved25d, primaryOverlay.transform, loaded.geometry, orientation, videoWidthPx, videoHeightPx);
+            } else {
+              renderedCanvas = null; // unreachable -- the outer `if (activeGltf3d || activeCurved25d)` guarantees one of the two branches above ran
+            }
 
             // Phase G Step 4/6/7: the real parametric neck surface. `runtime.
             // currentInstance.position` is the SAME attachment point
@@ -844,9 +1002,11 @@ export function useLiveArSession({
             // `pxPerMm3d` reuses the SAME calibration already trusted for the
             // jewellery's own physical scale; `neckWidthPx` is the EXISTING (M6.2)
             // neck-reference width estimate -- no new tracking, no new landmarks.
+            // Generic over WHICH representation is active (`activePhysicalWidthMm`)
+            // -- both go through the SAME `runtime.currentInstance`.
             if (debugEnabledRef.current && runtime.currentInstance) {
               const scale3d = deriveScaleResultFromSmoothedTransform(primaryOverlay.transform, loaded.geometry);
-              const pxPerMm3d = derivePxPerMm(scale3d.targetWidthPx, asset3d.metadata.physicalWidthMm);
+              const pxPerMm3d = derivePxPerMm(scale3d.targetWidthPx, activePhysicalWidthMm);
               const neckReferenceFrame3d = computeNeckReferenceFrame(face, pose, videoWidthPx, videoHeightPx);
               const frontSurfaceMm = { x: runtime.currentInstance.position.x, y: runtime.currentInstance.position.y, z: runtime.currentInstance.position.z };
               const neckFrame: NeckSurfaceFrame | null = computeNeckSurfaceFrame(
@@ -878,104 +1038,35 @@ export function useLiveArSession({
             }
 
             if (renderedCanvas) {
-              // Reuse the EXISTING category-level occlusion mask machinery
-              // (computeNecklaceOcclusionMask/buildOcclusionEraseRgba, both
-              // unmodified) via compositeOccluded3dOverlay (built in M6.8, wired for
-              // the first time here). HONEST SIMPLIFICATION (docs/
+              // Reuse the EXISTING category-level occlusion mask machinery, via
+              // compositeRendered3dFrame (extracted above from M6.8's original
+              // inline block, generic over gltf-3d/curved-2.5d -- see that
+              // function's own doc comment). HONEST SIMPLIFICATION (docs/
               // live-3d-jewellery-integration.md has the full account): this uses
-              // the COARSE category mask, not the 2D path's own finer jewellery-
-              // alpha-refined mask below (that refinement is specifically shaped
-              // around the 2D sprite's own alpha channel, not a 3D silhouette) --
-              // still a real, existing, unmodified occlusion mechanism, not a
-              // rewrite and not a fabricated one.
-              const maskAgeMs3d = segmentationSchedulerRef.current.getLatestAgeMs(frameStartMs);
-              const stale3d = isMaskStale(maskAgeMs3d, OCCLUSION_STALE_MASK_THRESHOLD_MS);
-              const latestMask3d = segmentationSchedulerRef.current.getLatest();
-
-              if (!three3dCompositeCanvasRef.current) three3dCompositeCanvasRef.current = document.createElement("canvas");
-              const compositeCanvas = three3dCompositeCanvasRef.current;
-              if (compositeCanvas.width !== videoWidthPx || compositeCanvas.height !== videoHeightPx) {
-                compositeCanvas.width = videoWidthPx;
-                compositeCanvas.height = videoHeightPx;
-              }
-              const compositeCtx = compositeCanvas.getContext("2d");
-
-              if (compositeCtx && !stale3d && latestMask3d) {
-                const bboxPx3d = computeTransformedBoundingBox(primaryOverlay.transform, loaded.geometry);
-                const region3d = toMaskSpaceRegion(
-                  bboxPx3d,
-                  primaryOverlay.transform.anchorPx.y,
-                  videoWidthPx,
-                  videoHeightPx,
-                  latestMask3d.maskWidthPx,
-                  latestMask3d.maskHeightPx
-                );
-                const categoryMask3d = computeNecklaceOcclusionMask(latestMask3d.categoryData, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx, region3d);
-
-                // Phase G Step 13/14: refine using the 3D render's OWN real alpha,
-                // not just the coarse category rule (Phase E/F's own documented
-                // limitation). `renderedCanvas` is already full-video-sized, so
-                // downscaling it directly to the mask's resolution needs no region/
-                // crop math (unlike the 2D path's bbox-cropped equivalent above).
-                let occlusionMask3d = categoryMask3d;
-                if (!three3dAlphaScratchCanvasRef.current) three3dAlphaScratchCanvasRef.current = document.createElement("canvas");
-                const alphaScratchCanvas3d = three3dAlphaScratchCanvasRef.current;
-                if (alphaScratchCanvas3d.width !== latestMask3d.maskWidthPx || alphaScratchCanvas3d.height !== latestMask3d.maskHeightPx) {
-                  alphaScratchCanvas3d.width = latestMask3d.maskWidthPx;
-                  alphaScratchCanvas3d.height = latestMask3d.maskHeightPx;
-                }
-                const alphaScratchCtx3d = alphaScratchCanvas3d.getContext("2d");
-                if (alphaScratchCtx3d) {
-                  alphaScratchCtx3d.clearRect(0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
-                  alphaScratchCtx3d.drawImage(renderedCanvas, 0, 0, videoWidthPx, videoHeightPx, 0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
-                  const { data: renderedRgba3d } = alphaScratchCtx3d.getImageData(0, 0, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx);
-                  const renderedAlpha3d = new Uint8ClampedArray(latestMask3d.maskWidthPx * latestMask3d.maskHeightPx);
-                  for (let i = 0; i < renderedAlpha3d.length; i++) renderedAlpha3d[i] = renderedRgba3d[i * 4 + 3];
-                  occlusionMask3d = applyRenderedAlphaToOcclusionMask(categoryMask3d, renderedAlpha3d);
-                }
-
-                if (!three3dEraseCanvasRef.current) three3dEraseCanvasRef.current = document.createElement("canvas");
-                const eraseCanvas3d = three3dEraseCanvasRef.current;
-                if (eraseCanvas3d.width !== latestMask3d.maskWidthPx || eraseCanvas3d.height !== latestMask3d.maskHeightPx) {
-                  eraseCanvas3d.width = latestMask3d.maskWidthPx;
-                  eraseCanvas3d.height = latestMask3d.maskHeightPx;
-                }
-                const eraseCtx3d = eraseCanvas3d.getContext("2d");
-                if (eraseCtx3d) {
-                  const eraseRgba3d = buildOcclusionEraseRgba(occlusionMask3d);
-                  eraseCtx3d.putImageData(
-                    new ImageData(eraseRgba3d as Uint8ClampedArray<ArrayBuffer>, latestMask3d.maskWidthPx, latestMask3d.maskHeightPx),
-                    0,
-                    0
-                  );
-                  compositeOccluded3dOverlay(
-                    compositeCtx,
-                    renderedCanvas,
-                    primaryOverlay.opacity,
-                    eraseCanvas3d,
-                    latestMask3d.maskWidthPx,
-                    latestMask3d.maskHeightPx,
-                    videoWidthPx,
-                    videoHeightPx
-                  );
-                  occluded3dCanvas = compositeCanvas;
-                }
-              } else if (compositeCtx) {
-                // Stale/missing mask -- same "no occlusion" fallback the 2D path
-                // uses (M6.4 Step 13), never a stale/incorrect erase pattern.
-                compositeCtx.clearRect(0, 0, videoWidthPx, videoHeightPx);
-                compositeCtx.save();
-                compositeCtx.globalAlpha = Math.max(0, Math.min(1, primaryOverlay.opacity));
-                compositeCtx.drawImage(renderedCanvas, 0, 0);
-                compositeCtx.restore();
-                occluded3dCanvas = compositeCanvas;
-              }
+              // the COARSE category mask refined by the render's own alpha, not the
+              // 2D path's own finer jewellery-alpha-refined mask below (that
+              // refinement is specifically shaped around the 2D sprite's own alpha
+              // channel) -- still a real, existing, unmodified occlusion mechanism.
+              occluded3dCanvas = compositeRendered3dFrame(
+                renderedCanvas,
+                primaryOverlay.transform,
+                primaryOverlay.opacity,
+                loaded.geometry,
+                videoWidthPx,
+                videoHeightPx,
+                frameStartMs,
+                segmentationSchedulerRef.current,
+                three3dCompositeCanvasRef,
+                three3dAlphaScratchCanvasRef,
+                three3dEraseCanvasRef
+              );
 
               const stats = getThreeRenderStats(runtime.renderer.info);
               live3dInfoThisFrame = {
                 status: "rendered",
                 jewelleryId,
-                attachmentType: asset3d.metadata.attachmentType,
+                attachmentType: activeAttachmentType,
+                representationMode,
                 transform: {
                   positionMm: { x: runtime.currentInstance?.position.x ?? 0, y: runtime.currentInstance?.position.y ?? 0, z: runtime.currentInstance?.position.z ?? 0 },
                   scale: runtime.currentInstance?.scale.x ?? 0,
@@ -990,10 +1081,10 @@ export function useLiveArSession({
                 stats,
               };
             } else {
-              live3dInfoThisFrame = { status: "error", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, orientation: null, stats: null };
+              live3dInfoThisFrame = { status: "error", jewelleryId, attachmentType: activeAttachmentType, representationMode, transform: null, orientation: null, stats: null };
             }
           } else if (threeUnavailableRef.current) {
-            live3dInfoThisFrame = { status: "webgl_unavailable", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, orientation: null, stats: null };
+            live3dInfoThisFrame = { status: "webgl_unavailable", jewelleryId, attachmentType: activeAttachmentType, representationMode, transform: null, orientation: null, stats: null };
           }
         }
       }

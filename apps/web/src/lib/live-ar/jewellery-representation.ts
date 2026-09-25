@@ -37,7 +37,41 @@
  */
 import type { JewelleryAssetGeometry } from "@/lib/live-ar/types";
 
-export type JewelleryRepresentationType = "flat-2d" | "layered-2.5d" | "gltf-3d";
+export type JewelleryRepresentationType = "flat-2d" | "curved-2.5d" | "layered-2.5d" | "gltf-3d";
+
+/**
+ * "2.5D jewellery surface attachment" (docs/2-5d-jewellery-surface-attachment.md):
+ * a real, curved, subdivided mesh carrying the jewellery's ACTUAL artwork as its
+ * texture (never a procedural placeholder) -- distinct from `"layered-2.5d"`
+ * below, which M6.7 originally reserved for a completely different mechanism
+ * (multiple discrete multi-view-angle images) that was never implemented. Kept as
+ * a separate type value rather than overloading that name's established meaning.
+ *
+ * Mirrors `Gltf3dAssetMetadata`'s own shape exactly: contract-generic fields
+ * (`physicalWidthMm`/`attachmentType`/`mirrorable`/`productionVerified`) sit
+ * alongside this representation's OWN specific fields (`curveControlPointsMm` --
+ * the curve-authoring equivalent of `Gltf3dAssetMetadata.modelUrl`), one type, not
+ * a contract type plus a separate richer runtime type. Same `productionVerified`
+ * discipline -- a curved mesh existing is not automatically a claim it looks
+ * right; see `curved-2_5d-bridge.ts`'s own registry for where this is actually set.
+ */
+export interface Curved25dAssetMetadata {
+  attachmentType: string;
+  physicalWidthMm: number;
+  physicalHeightMm: number;
+  physicalDepthMm: number | null;
+  /** The item's own real curvature, in the ribbon's local mm space -- see
+   * `curved-2_5d-geometry.ts`'s `CurvedRibbonControlPoint`. Kept as a plain
+   * `{x,y,z}[]` here (not importing that THREE-adjacent type) so this contract
+   * module stays framework-agnostic, exactly like `Gltf3dAssetMetadata`'s own
+   * plain `anchor: {x,y,z}` field. */
+  curveControlPointsMm: { x: number; y: number; z: number }[];
+  curveClosed: boolean;
+  segmentsU?: number;
+  segmentsV?: number;
+  mirrorable: boolean;
+  productionVerified: boolean;
+}
 
 /** M6.8 spec Step 5's 3D asset contract. Every field besides `modelUrl`/`modelFormat`
  * is either reused from the catalogue's existing physical-dimension columns, or an
@@ -93,6 +127,10 @@ export interface JewelleryRepresentationInput {
   /** Not exposed by the catalogue schema today (no column exists) -- see this
    * module's file docstring. Always null/undefined until a real migration adds one. */
   gltf3dAsset?: Gltf3dAssetMetadata | null;
+  /** Real today (unlike `gltf3dAsset`/`layeredAssetUrls`) -- populated from
+   * `curved-2_5d-bridge.ts`'s own registry at the call site. See
+   * `Curved25dAssetMetadata`'s own doc comment for what it represents. */
+  curved25dAsset?: Curved25dAssetMetadata | null;
   /** Same status as `gltf3dAsset` -- no layered/multi-view asset field exists yet. */
   layeredAssetUrls?: string[] | null;
 }
@@ -101,25 +139,33 @@ export interface JewelleryRepresentation {
   type: JewelleryRepresentationType;
   flatAsset: { image: HTMLImageElement; geometry: JewelleryAssetGeometry } | null;
   gltf3dAsset: Gltf3dAssetMetadata | null;
+  curved25dAsset: Curved25dAssetMetadata | null;
   layeredAssetUrls: string[] | null;
 }
 
-/** Resolution order: gltf-3d > layered-2.5d > flat-2d -- richer representations win
- * when present AND `productionVerified` (spec Step 18's "3D asset available? YES ->
- * use 3D, NO -> use current 2D/2.5D renderer" -- "available" means verified, not
- * merely existing; see `Gltf3dAssetMetadata.productionVerified`'s own doc comment).
- * An unverified gltf3dAsset is treated exactly like no gltf3dAsset at all -- never a
- * partial/degraded 3D representation. Pure -- safe to call once per loaded item,
- * same discipline as jewellery-attachment.ts's resolveNecklaceAttachmentModel. */
+/** Resolution order: gltf-3d > curved-2.5d > layered-2.5d > flat-2d -- richer
+ * representations win when present AND `productionVerified` (spec Step 18's "3D
+ * asset available? YES -> use 3D, NO -> use current 2D/2.5D renderer" --
+ * "available" means verified, not merely existing; see
+ * `Gltf3dAssetMetadata.productionVerified`'s own doc comment, and
+ * `Curved25dAssetMetadata.productionVerified` for the identical rule applied to the
+ * curved-textured-mesh representation). An unverified asset of either kind is
+ * treated exactly like that asset not existing at all -- never a partial/degraded
+ * representation. Pure -- safe to call once per loaded item, same discipline as
+ * jewellery-attachment.ts's resolveNecklaceAttachmentModel. */
 export function resolveJewelleryRepresentation(input: JewelleryRepresentationInput): JewelleryRepresentation {
   const gltf3dAsset = input.gltf3dAsset && input.gltf3dAsset.productionVerified ? input.gltf3dAsset : null;
+  const curved25dAsset = input.curved25dAsset && input.curved25dAsset.productionVerified ? input.curved25dAsset : null;
   const layeredAssetUrls = input.layeredAssetUrls ?? null;
 
   if (gltf3dAsset) {
-    return { type: "gltf-3d", flatAsset: input.flatAsset, gltf3dAsset, layeredAssetUrls };
+    return { type: "gltf-3d", flatAsset: input.flatAsset, gltf3dAsset, curved25dAsset: null, layeredAssetUrls };
+  }
+  if (curved25dAsset) {
+    return { type: "curved-2.5d", flatAsset: input.flatAsset, gltf3dAsset: null, curved25dAsset, layeredAssetUrls };
   }
   if (layeredAssetUrls && layeredAssetUrls.length > 0) {
-    return { type: "layered-2.5d", flatAsset: input.flatAsset, gltf3dAsset: null, layeredAssetUrls };
+    return { type: "layered-2.5d", flatAsset: input.flatAsset, gltf3dAsset: null, curved25dAsset: null, layeredAssetUrls };
   }
-  return { type: "flat-2d", flatAsset: input.flatAsset, gltf3dAsset: null, layeredAssetUrls: null };
+  return { type: "flat-2d", flatAsset: input.flatAsset, gltf3dAsset: null, curved25dAsset: null, layeredAssetUrls: null };
 }

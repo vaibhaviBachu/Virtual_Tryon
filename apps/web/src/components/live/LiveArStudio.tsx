@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
-import { formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
+import { formatLive3dDebugInfo, formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { formatCategoryDistribution, formatHairOverlapReport, formatJewelleryAlphaOcclusionReport } from "@/lib/live-ar/occlusion";
 import { NECK_ATTACHMENT_FRACTION_OF_NECK_LENGTH } from "@/lib/live-ar/constants";
 import {
@@ -627,6 +627,15 @@ export function LiveArStudio() {
         {showDebugOverlay && category === "necklace" && session.debugSnapshot && (
           <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-lime-300">
             {formatNecklaceDebugSnapshot(session.debugSnapshot)}
+          </pre>
+        )}
+
+        {/* Phase 2.5D Step 21: which representation (flat-2D / curved-2.5D / gltf-3D)
+            actually produced this frame -- see useLiveArSession.ts's own live3dDebugInfo
+            doc comment for exactly what "none" vs a real mode means. */}
+        {showDebugOverlay && category === "necklace" && (
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-sky-300">
+            {formatLive3dDebugInfo(session.live3dDebugInfo)}
           </pre>
         )}
 
