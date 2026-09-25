@@ -68,6 +68,20 @@ export interface Gltf3dAssetMetadata {
    * means "trust the GLB exactly as authored," the default and expected case. */
   scaleCorrection: number | null;
   rotationCorrectionDegrees: { yawDegrees: number; pitchDegrees: number; rollDegrees: number } | null;
+  /**
+   * Generic distinction (docs/diamond-choker-asset-restoration.md): a 3D asset
+   * existing is NOT the same claim as a 3D asset being an accurate, reviewed
+   * representation of the real jewellery. `true` only once a human has looked at
+   * this specific asset rendered and confirmed it actually depicts the piece --
+   * never set to `true` merely because a GLB (procedurally generated or otherwise)
+   * happens to exist. `resolveJewelleryRepresentation` below treats `false` exactly
+   * like "no gltf3dAsset at all," falling back to the existing 2D/2.5D
+   * representations -- the SAME rule `three-live-bridge.ts`'s own registry enforces
+   * at the live-render call site, so a future real database column backing this
+   * field would only need to feed both places the same value, never two different
+   * gating mechanisms.
+   */
+  productionVerified: boolean;
 }
 
 /** Everything about one loaded jewellery item that COULD inform which representation
@@ -91,11 +105,14 @@ export interface JewelleryRepresentation {
 }
 
 /** Resolution order: gltf-3d > layered-2.5d > flat-2d -- richer representations win
- * when present (spec Step 18's "3D asset available? YES -> use 3D, NO -> use current
- * 2D/2.5D renderer"), never the reverse. Pure -- safe to call once per loaded item,
+ * when present AND `productionVerified` (spec Step 18's "3D asset available? YES ->
+ * use 3D, NO -> use current 2D/2.5D renderer" -- "available" means verified, not
+ * merely existing; see `Gltf3dAssetMetadata.productionVerified`'s own doc comment).
+ * An unverified gltf3dAsset is treated exactly like no gltf3dAsset at all -- never a
+ * partial/degraded 3D representation. Pure -- safe to call once per loaded item,
  * same discipline as jewellery-attachment.ts's resolveNecklaceAttachmentModel. */
 export function resolveJewelleryRepresentation(input: JewelleryRepresentationInput): JewelleryRepresentation {
-  const gltf3dAsset = input.gltf3dAsset ?? null;
+  const gltf3dAsset = input.gltf3dAsset && input.gltf3dAsset.productionVerified ? input.gltf3dAsset : null;
   const layeredAssetUrls = input.layeredAssetUrls ?? null;
 
   if (gltf3dAsset) {

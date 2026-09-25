@@ -90,6 +90,11 @@ describe.each([
         materialProfile: "pbr-metallic-roughness",
         scaleCorrection: null,
         rotationCorrectionDegrees: null,
+        // Testing the CONTRACT/plumbing ("a generated asset, once marked verified,
+        // is consumable by resolveJewelleryRepresentation") -- not a claim that
+        // Phase D's own generated output should ever actually reach a customer;
+        // see docs/diamond-choker-asset-restoration.md.
+        productionVerified: true,
       },
     });
     expect(representation.type).toBe("gltf-3d");

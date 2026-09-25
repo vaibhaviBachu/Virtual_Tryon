@@ -33,6 +33,7 @@ function fakeGltf3dAsset(overrides: Partial<Gltf3dAssetMetadata> = {}): Gltf3dAs
     materialProfile: "pbr-metallic-roughness",
     scaleCorrection: null,
     rotationCorrectionDegrees: null,
+    productionVerified: true,
     ...overrides,
   };
 }
@@ -92,6 +93,21 @@ describe("resolveJewelleryRepresentation", () => {
     expect(() => resolveJewelleryRepresentation({ flatAsset: null })).not.toThrow();
     expect(resolveJewelleryRepresentation({ flatAsset: null }).type).toBe("flat-2d");
     expect(resolveJewelleryRepresentation({ flatAsset: null, gltf3dAsset: fakeGltf3dAsset() }).type).toBe("gltf-3d");
+  });
+
+  it("treats an UNVERIFIED gltf3dAsset exactly like no gltf3dAsset at all -- a procedural prototype existing is never enough on its own (docs/diamond-choker-asset-restoration.md)", () => {
+    const result = resolveJewelleryRepresentation({ flatAsset: fakeFlatAsset(), gltf3dAsset: fakeGltf3dAsset({ productionVerified: false }) });
+    expect(result.type).toBe("flat-2d");
+    expect(result.gltf3dAsset).toBeNull();
+  });
+
+  it("an unverified gltf3dAsset still falls back correctly to layered-2.5d when that's also present", () => {
+    const result = resolveJewelleryRepresentation({
+      flatAsset: fakeFlatAsset(),
+      gltf3dAsset: fakeGltf3dAsset({ productionVerified: false }),
+      layeredAssetUrls: ["front.png"],
+    });
+    expect(result.type).toBe("layered-2.5d");
   });
 
   it("reuses the catalogue's own physical dimensions on the gltf3dAsset metadata -- never a duplicated/independent dimension", () => {

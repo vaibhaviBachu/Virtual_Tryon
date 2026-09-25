@@ -46,6 +46,11 @@ function fixtureMetadata(overrides: Partial<Gltf3dAssetMetadata> = {}, modelUrl:
     materialProfile: "pbr-metallic-roughness",
     scaleCorrection: null,
     rotationCorrectionDegrees: null,
+    // These fixtures test the LOADING/TRANSFORM pipeline (loadLive3dAssetFromMetadata,
+    // computeLive3dTransform, computeSurfaceAttachedTransform), independent of the
+    // customer-facing productionVerified gate -- default true so existing
+    // pipeline-focused tests aren't coupled to that separate concern.
+    productionVerified: true,
     ...overrides,
   };
 }
