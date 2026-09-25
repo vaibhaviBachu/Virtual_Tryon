@@ -64,6 +64,15 @@ export interface LiveFaceLandmarks {
   landmarks: NormalizedPoint[];
   faceBoundingBox: { xMin: number; yMin: number; xMax: number; yMax: number } | null;
   detectionConfidence: number;
+  /** Phase F: MediaPipe FaceLandmarker's own real facial transformation matrix (a
+   * flattened 4x4, enabled via `outputFacialTransformationMatrixes: true` in
+   * tracking.ts) -- the actual rotation+translation fit of MediaPipe's canonical
+   * face model onto this frame's detected face, NOT a 2D heuristic. Null whenever no
+   * face was tracked, or the tracker didn't produce one for this frame -- never
+   * fabricated. See three/head-pose.ts's `decomposeFacialTransformMatrix` for how
+   * this is turned into a usable rotation, and that module's file docstring for the
+   * one real, unverified-without-a-device assumption (column-major layout). */
+  faceTransformMatrix: number[] | null;
 }
 
 export interface BodyReferenceFrame {

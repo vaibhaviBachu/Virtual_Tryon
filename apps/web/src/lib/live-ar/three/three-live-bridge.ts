@@ -40,11 +40,18 @@
 import * as THREE from "three";
 
 import type { Gltf3dAssetMetadata } from "@/lib/live-ar/jewellery-representation";
+import type { SurfaceOrientation } from "@/lib/live-ar/three/body-attachment";
 import { cloneGltfInstance, loadGltfAsset } from "@/lib/live-ar/three/three-asset-loader";
 import { buildCameraConfig, createThreeCamera, updateCameraForViewport } from "@/lib/live-ar/three/three-camera";
 import { addRestrainedLighting, applyEnvironmentLighting, createThreeScene } from "@/lib/live-ar/three/three-scene";
 import { createThreeRenderer, renderThreeFrame, resizeThreeRenderer } from "@/lib/live-ar/three/three-renderer";
-import { computeThreeJewelleryTransform } from "@/lib/live-ar/three/three-transform";
+import {
+  composeJewelleryQuaternionFromEuler,
+  computeMeshScaleFactor,
+  computeThreeJewelleryTransform,
+  computeVirtualDepthMm,
+  unprojectScreenPointAtDepth,
+} from "@/lib/live-ar/three/three-transform";
 import type { ThreeCameraConfig, ThreeJewelleryTransform } from "@/lib/live-ar/three/three-types";
 import type { CategorySlug, JewelleryAssetGeometry, LiveTransform, RotationResult, ScaleResult } from "@/lib/live-ar/types";
 
@@ -290,6 +297,89 @@ export function renderLive3dFrame(
   resizeThreeRenderer(runtime.renderer, viewportWidthPx, viewportHeightPx);
   const cameraConfig = buildCameraConfig(viewportWidthPx, viewportHeightPx);
   const transform = computeLive3dTransform(smoothed, asset, assetGeometry, yawAsymmetry, viewportWidthPx, viewportHeightPx, cameraConfig);
+  if (!transform) return null;
+  ensureInstanceInScene(runtime, asset.instance);
+  applyLive3dTransform(asset.instance, transform);
+  renderThreeFrame(runtime.renderer, runtime.scene, runtime.camera);
+  return runtime.canvas;
+}
+
+/**
+ * Phase F (docs/true-body-surface-jewellery-attachment.md) — the surface-attached
+ * transform. `computeLive3dTransform`/`renderLive3dFrame` above are UNCHANGED (Phase
+ * E's exact behavior, and their own existing tests still pass unmodified); this is a
+ * new, separate function because Phase F's actual fix is a different ORIENTATION
+ * source, not a different position/scale derivation.
+ *
+ * Position and scale are IDENTICAL to Phase E: the already-smoothed 2D anchor,
+ * unprojected at the depth that matches the already-validated 2D on-screen scale
+ * (`computeVirtualDepthMm`/`unprojectScreenPointAtDepth`, both unmodified), then
+ * rescaled to the catalogue's physical width (`computeMeshScaleFactor`, unmodified).
+ *
+ * Orientation is the real fix: `orientation` (from `body-attachment.ts`'s
+ * `resolveAttachmentOrientation`) carries a REAL yaw+pitch (from MediaPipe's own
+ * facial transformation matrix, when available) and a real roll (shoulder-line
+ * tilt) -- composed via `composeJewelleryQuaternionFromEuler`, never the old
+ * pitch-always-0 `composeJewelleryQuaternion`.
+ *
+ * `physicalDepthMm`'s role (Step 11's "physically meaningful local attachment
+ * offset"): the mesh's own LOCAL origin is nudged forward by HALF the item's own
+ * authored depth, along whichever way the mesh is CURRENTLY oriented (the offset is
+ * rotated by the SAME orientation quaternion, so it always points "out of the neck"
+ * from the current perspective, never a fixed world direction) -- so the mesh's
+ * BACK surface sits at the estimated attachment depth (approximating "resting on the
+ * skin") rather than the mesh's CENTERLINE floating there. This is the asset's own
+ * already-known `physicalDepthMm` (Phase D/E, e.g. 12mm for the Diamond Choker), not
+ * an invented constant -- when it's null, the offset is simply 0 (no claim made).
+ */
+export function computeSurfaceAttachedTransform(
+  smoothed: LiveTransform,
+  asset: Live3dJewelleryAsset,
+  assetGeometry: JewelleryAssetGeometry,
+  orientation: SurfaceOrientation,
+  viewportWidthPx: number,
+  viewportHeightPx: number,
+  cameraConfig: ThreeCameraConfig
+): ThreeJewelleryTransform | null {
+  if (asset.metadata.physicalWidthMm === null) return null;
+  const scale = deriveScaleResultFromSmoothedTransform(smoothed, assetGeometry);
+  if (!scale.success || scale.targetWidthPx === null) return null;
+
+  const depthMm = computeVirtualDepthMm(asset.metadata.physicalWidthMm, scale.targetWidthPx, viewportHeightPx, cameraConfig.verticalFovDegrees);
+  const basePositionMm = unprojectScreenPointAtDepth(smoothed.anchorPx, viewportWidthPx, viewportHeightPx, depthMm, cameraConfig);
+  const quaternion = composeJewelleryQuaternionFromEuler(orientation.yawRadians, orientation.pitchRadians, orientation.rollRadians);
+
+  const halfDepthMm = (asset.metadata.physicalDepthMm ?? 0) / 2;
+  const localForward = new THREE.Vector3(0, 0, halfDepthMm).applyQuaternion(new THREE.Quaternion(quaternion[0], quaternion[1], quaternion[2], quaternion[3]));
+
+  return {
+    positionMm: { x: basePositionMm.x + localForward.x, y: basePositionMm.y + localForward.y, z: basePositionMm.z + localForward.z },
+    quaternion,
+    scale: computeMeshScaleFactor(asset.metadata.physicalWidthMm, asset.boundingBoxWidthMm),
+  };
+}
+
+/**
+ * Surface-attached counterpart to `renderLive3dFrame` above -- same WebGL2/renderer
+ * plumbing, different transform source (`computeSurfaceAttachedTransform`, taking a
+ * real `SurfaceOrientation` instead of a bare yaw scalar). This is the function
+ * `useLiveArSession.ts` actually calls for the live necklace path as of Phase F.
+ * NOT exercised by `vitest run` for the same real-WebGL2-required reason as
+ * `renderLive3dFrame` -- see that function's own doc comment.
+ */
+export function renderSurfaceAttachedFrame(
+  runtime: ThreeLiveRuntime,
+  asset: Live3dJewelleryAsset,
+  smoothed: LiveTransform,
+  assetGeometry: JewelleryAssetGeometry,
+  orientation: SurfaceOrientation,
+  viewportWidthPx: number,
+  viewportHeightPx: number
+): HTMLCanvasElement | null {
+  updateCameraForViewport(runtime.camera, viewportWidthPx, viewportHeightPx);
+  resizeThreeRenderer(runtime.renderer, viewportWidthPx, viewportHeightPx);
+  const cameraConfig = buildCameraConfig(viewportWidthPx, viewportHeightPx);
+  const transform = computeSurfaceAttachedTransform(smoothed, asset, assetGeometry, orientation, viewportWidthPx, viewportHeightPx, cameraConfig);
   if (!transform) return null;
   ensureInstanceInScene(runtime, asset.instance);
   applyLive3dTransform(asset.instance, transform);

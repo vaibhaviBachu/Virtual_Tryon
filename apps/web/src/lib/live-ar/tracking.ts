@@ -62,6 +62,12 @@ export async function createLiveTrackers(): Promise<LiveTrackers> {
     baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "GPU" },
     runningMode: "VIDEO",
     numFaces: 1,
+    // Phase F (docs/true-body-surface-jewellery-attachment.md): a real MediaPipe
+    // Tasks-Vision option (confirmed present in the installed package's own type
+    // definitions), previously available but unused. Gives a real 3D head
+    // rotation+translation per frame (facialTransformationMatrixes below) instead of
+    // the 2D landmark-asymmetry proxy this pipeline relied on exclusively before.
+    outputFacialTransformationMatrixes: true,
   });
 
   const poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
@@ -136,12 +142,22 @@ export function toLiveFaceLandmarks(result: FaceLandmarkerResult): LiveFaceLandm
     if (point.y > yMax) yMax = point.y;
   }
 
+  // Phase F: present only when outputFacialTransformationMatrixes was enabled
+  // (createLiveTrackers, not createImageTrackers -- the static photo-preview path
+  // has no use for a live head-pose signal) AND MediaPipe actually produced one for
+  // this face this frame. `Matrix.rows`/`.columns` are checked, not assumed, before
+  // trusting `.data` -- a defensive check against a future SDK shape change, not a
+  // real observed failure.
+  const rawMatrix = result.facialTransformationMatrixes?.[0];
+  const faceTransformMatrix = rawMatrix && rawMatrix.rows === 4 && rawMatrix.columns === 4 ? rawMatrix.data : null;
+
   return {
     landmarks: toNormalizedPoints(landmarks),
     faceBoundingBox: { xMin, yMin, xMax, yMax },
     // See this module's docstring: Tasks-Vision VIDEO mode gives presence, not a
     // graded score, for FaceLandmarker specifically.
     detectionConfidence: 1.0,
+    faceTransformMatrix,
   };
 }
 

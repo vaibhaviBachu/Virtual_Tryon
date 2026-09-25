@@ -18,7 +18,7 @@ function faceWithConfidence(confidence: number): LiveFaceLandmarks {
   landmarks[1] = { x: 0.5, y: 0.55 };
   landmarks[234] = { x: 0.3, y: 0.5 };
   landmarks[454] = { x: 0.7, y: 0.5 };
-  return { landmarks, faceBoundingBox: { xMin: 0.3, yMin: 0.2, xMax: 0.7, yMax: 0.8 }, detectionConfidence: confidence };
+  return { landmarks, faceBoundingBox: { xMin: 0.3, yMin: 0.2, xMax: 0.7, yMax: 0.8 }, detectionConfidence: confidence, faceTransformMatrix: null };
 }
 
 describe("evaluateNecklaceReadiness", () => {

@@ -8,6 +8,7 @@ import {
   applyLive3dTransform,
   attachmentTypeToTrackedCategory,
   computeLive3dTransform,
+  computeSurfaceAttachedTransform,
   deriveRotationResultFromSmoothedTransform,
   deriveScaleResultFromSmoothedTransform,
   loadLive3dAssetFromMetadata,
@@ -179,6 +180,77 @@ describe("computeLive3dTransform", () => {
     const straight = computeLive3dTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, 0, 640, 480, cameraConfig)!;
     const turned = computeLive3dTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, 1, 640, 480, cameraConfig)!;
     expect(turned.quaternion).not.toEqual(straight.quaternion);
+    clearGltfAssetCache();
+  });
+});
+
+describe("computeSurfaceAttachedTransform (Phase F)", () => {
+  const smoothed: LiveTransform = { anchorPx: { x: 320, y: 240 }, scaleFactor: 0.5, rotationDegrees: 0, sourceAnchorPx: { x: 0, y: 0 }, mirrored: false };
+  const cameraConfig = buildCameraConfig(640, 480);
+  const neutralOrientation = { yawRadians: 0, pitchRadians: 0, rollRadians: 0, confidence: 1, method: "shoulder_roll_plus_real_facial_transform_matrix" as const };
+
+  it("returns null when the asset has no physicalWidthMm -- same honest limitation as computeLive3dTransform", async () => {
+    const url = await buildFixtureGlbDataUrl();
+    const asset = await loadLive3dAssetFromMetadata(fixtureMetadata({ physicalWidthMm: null }, url));
+    expect(computeSurfaceAttachedTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, neutralOrientation, 640, 480, cameraConfig)).toBeNull();
+    clearGltfAssetCache();
+  });
+
+  it("with zero orientation and zero physicalDepthMm, matches computeLive3dTransform's position exactly (no hidden offset when there's nothing to offset by)", async () => {
+    const url = await buildFixtureGlbDataUrl();
+    const asset = await loadLive3dAssetFromMetadata(fixtureMetadata({ physicalDepthMm: null }, url));
+    const surfaceTransform = computeSurfaceAttachedTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, neutralOrientation, 640, 480, cameraConfig)!;
+    const legacyTransform = computeLive3dTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, 0, 640, 480, cameraConfig)!;
+    expect(surfaceTransform.positionMm.x).toBeCloseTo(legacyTransform.positionMm.x, 6);
+    expect(surfaceTransform.positionMm.y).toBeCloseTo(legacyTransform.positionMm.y, 6);
+    expect(surfaceTransform.positionMm.z).toBeCloseTo(legacyTransform.positionMm.z, 6);
+    clearGltfAssetCache();
+  });
+
+  it("a nonzero physicalDepthMm pulls the mesh's position toward the camera by exactly half that depth, at yaw=0/pitch=0 (a physically meaningful, documented offset, not an arbitrary one)", async () => {
+    const url = await buildFixtureGlbDataUrl();
+    const asset = await loadLive3dAssetFromMetadata(fixtureMetadata({ physicalDepthMm: 12 }, url));
+    const withDepth = computeSurfaceAttachedTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, neutralOrientation, 640, 480, cameraConfig)!;
+    const withoutDepth = computeLive3dTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, 0, 640, 480, cameraConfig)!;
+    // At yaw=0/pitch=0, local +Z (the offset direction) IS world +Z -- closer to the
+    // camera (which sits at z=0 looking down -Z) means a LARGER (less negative) z.
+    expect(withDepth.positionMm.z).toBeCloseTo(withoutDepth.positionMm.z + 6, 4);
+    expect(withDepth.positionMm.x).toBeCloseTo(withoutDepth.positionMm.x, 4);
+    expect(withDepth.positionMm.y).toBeCloseTo(withoutDepth.positionMm.y, 4);
+    clearGltfAssetCache();
+  });
+
+  it("a real pitch actually changes the quaternion -- Phase F's core fix (Phase E's orientation always had pitch=0)", async () => {
+    const url = await buildFixtureGlbDataUrl();
+    const asset = await loadLive3dAssetFromMetadata(fixtureMetadata({}, url));
+    const level = computeSurfaceAttachedTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, neutralOrientation, 640, 480, cameraConfig)!;
+    const tilted = computeSurfaceAttachedTransform(
+      smoothed,
+      asset,
+      FIXTURE_ASSET_GEOMETRY,
+      { ...neutralOrientation, pitchRadians: 0.3 },
+      640,
+      480,
+      cameraConfig
+    )!;
+    expect(tilted.quaternion).not.toEqual(level.quaternion);
+    clearGltfAssetCache();
+  });
+
+  it("roll (shoulder tilt) is honored independently of yaw/pitch", async () => {
+    const url = await buildFixtureGlbDataUrl();
+    const asset = await loadLive3dAssetFromMetadata(fixtureMetadata({}, url));
+    const level = computeSurfaceAttachedTransform(smoothed, asset, FIXTURE_ASSET_GEOMETRY, neutralOrientation, 640, 480, cameraConfig)!;
+    const rolled = computeSurfaceAttachedTransform(
+      smoothed,
+      asset,
+      FIXTURE_ASSET_GEOMETRY,
+      { ...neutralOrientation, rollRadians: 0.2 },
+      640,
+      480,
+      cameraConfig
+    )!;
+    expect(rolled.quaternion).not.toEqual(level.quaternion);
     clearGltfAssetCache();
   });
 });

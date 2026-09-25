@@ -21,6 +21,7 @@ function face(): LiveFaceLandmarks {
     landmarks,
     faceBoundingBox: { xMin: 0.35, yMin: 0.05, xMax: 0.65, yMax: 0.2 },
     detectionConfidence: 0.9,
+    faceTransformMatrix: null,
   };
 }
 

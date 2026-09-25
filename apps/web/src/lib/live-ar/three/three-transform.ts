@@ -78,6 +78,20 @@ export function composeJewelleryQuaternion(yawRadians: number, rollRadians: numb
   return [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
 }
 
+/** Phase F: the same composition as `composeJewelleryQuaternion` above, generalized
+ * to a real, non-zero pitch -- kept as a SEPARATE function (never modifying the
+ * existing one, which stays exactly as M6.8 shipped it and exactly as its own
+ * existing tests still verify) because until Phase F, no real pitch measurement
+ * existed anywhere in this codebase; `composeJewelleryQuaternion`'s hardcoded 0 was
+ * an honest "we have nothing better," not a bug to silently change underneath
+ * existing callers. New callers (three-live-bridge.ts's surface-attached transform)
+ * use this one instead. Same "YXZ" Euler order as the original. */
+export function composeJewelleryQuaternionFromEuler(yawRadians: number, pitchRadians: number, rollRadians: number): [number, number, number, number] {
+  const euler = new THREE.Euler(pitchRadians, yawRadians, rollRadians, "YXZ");
+  const quaternion = new THREE.Quaternion().setFromEuler(euler);
+  return [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
+}
+
 /** Converts geometry.ts's `estimateHeadYawAsymmetry` proxy into a yaw angle in
  * radians, for `composeJewelleryQuaternion` above. `null` (no face tracked) maps to 0
  * radians -- the same straight-on fallback the 2D pipeline uses. */

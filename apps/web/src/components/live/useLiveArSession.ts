@@ -46,12 +46,13 @@ import {
 } from "@/lib/live-ar/renderer";
 import { buildSegmentationDebugRgba, createLiveSegmenter, runSegmentation, SegmentationCadenceScheduler, type LiveSegmenter } from "@/lib/live-ar/segmentation";
 import { TransformSmoother } from "@/lib/live-ar/smoothing";
+import { resolveAttachmentOrientation } from "@/lib/live-ar/three/body-attachment";
 import {
   attachmentTypeToTrackedCategory,
   createThreeLiveRuntime,
   disposeThreeLiveRuntime,
   loadLive3dJewelleryAsset,
-  renderLive3dFrame,
+  renderSurfaceAttachedFrame,
   type Live3dJewelleryAsset,
   type ThreeLiveRuntime,
 } from "@/lib/live-ar/three/three-live-bridge";
@@ -260,7 +261,12 @@ export interface UseLiveArSessionResult {
     status: "none" | "loading" | "error" | "webgl_unavailable" | "rendered";
     jewelleryId: string | null;
     attachmentType: string | null;
-    transform: { positionMm: { x: number; y: number; z: number }; scale: number; yawAsymmetry: number } | null;
+    transform: { positionMm: { x: number; y: number; z: number }; scale: number } | null;
+    /** Phase F (docs/true-body-surface-jewellery-attachment.md Step 14): the real
+     * orientation actually applied this frame -- `method` distinguishes a real
+     * MediaPipe facial-transformation-matrix-derived pose from the 2D yaw-proxy
+     * fallback, so a real-device tester can see directly which signal was in play. */
+    orientation: { yawDegrees: number; pitchDegrees: number; rollDegrees: number; confidence: number; method: string } | null;
     stats: { drawCalls: number; triangles: number; textures: number; geometries: number } | null;
   } | null;
   /** M6.4 real-device review Step 2: a small canvas the render loop draws the FINAL
@@ -801,7 +807,19 @@ export function useLiveArSession({
           }
           const runtime = threeRuntimeRef.current;
           if (runtime) {
-            const renderedCanvas = renderLive3dFrame(runtime, asset3d, primaryOverlay.transform, loaded.geometry, yawAsymmetry, videoWidthPx, videoHeightPx);
+            // Phase F (docs/true-body-surface-jewellery-attachment.md): a real 3D
+            // orientation (yaw+pitch from MediaPipe's own facial transformation
+            // matrix when available, roll from the real shoulder-line tilt) drives
+            // the mesh's rotation -- replacing Phase E's yaw-proxy-only, pitch-
+            // always-0 orientation, which is the diagnosed root cause of the
+            // "floating filter" look. Position/scale are unchanged from Phase E.
+            // "necklace" always has a registered resolver (body-attachment.ts) --
+            // the non-null assertion reflects that structural fact, not an unchecked
+            // assumption about tracking data (resolveNeckAttachmentOrientation
+            // itself degrades gracefully to a neutral orientation when face/pose are
+            // both null, see that function's own tests).
+            const orientation = resolveAttachmentOrientation("necklace", face, pose, videoWidthPx, videoHeightPx)!;
+            const renderedCanvas = renderSurfaceAttachedFrame(runtime, asset3d, primaryOverlay.transform, loaded.geometry, orientation, videoWidthPx, videoHeightPx);
             if (renderedCanvas) {
               // Reuse the EXISTING category-level occlusion mask machinery
               // (computeNecklaceOcclusionMask/buildOcclusionEraseRgba, both
@@ -882,15 +900,21 @@ export function useLiveArSession({
                 transform: {
                   positionMm: { x: runtime.currentInstance?.position.x ?? 0, y: runtime.currentInstance?.position.y ?? 0, z: runtime.currentInstance?.position.z ?? 0 },
                   scale: runtime.currentInstance?.scale.x ?? 0,
-                  yawAsymmetry,
+                },
+                orientation: {
+                  yawDegrees: (orientation.yawRadians * 180) / Math.PI,
+                  pitchDegrees: (orientation.pitchRadians * 180) / Math.PI,
+                  rollDegrees: (orientation.rollRadians * 180) / Math.PI,
+                  confidence: orientation.confidence,
+                  method: orientation.method,
                 },
                 stats,
               };
             } else {
-              live3dInfoThisFrame = { status: "error", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, stats: null };
+              live3dInfoThisFrame = { status: "error", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, orientation: null, stats: null };
             }
           } else if (threeUnavailableRef.current) {
-            live3dInfoThisFrame = { status: "webgl_unavailable", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, stats: null };
+            live3dInfoThisFrame = { status: "webgl_unavailable", jewelleryId, attachmentType: asset3d.metadata.attachmentType, transform: null, orientation: null, stats: null };
           }
         }
       }

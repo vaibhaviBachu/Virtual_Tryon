@@ -19,6 +19,7 @@ function faceWithChin(yMax: number, xMin = 0.3, xMax = 0.7, detectionConfidence 
     landmarks: [],
     faceBoundingBox: { xMin, yMin: yMax - 0.3, xMax, yMax },
     detectionConfidence,
+    faceTransformMatrix: null,
   };
 }
 
@@ -82,7 +83,7 @@ describe("computeNeckReferenceFrame", () => {
 
   it("falls back when the face bounding box is missing", () => {
     const pose = poseWithShoulders();
-    const face: LiveFaceLandmarks = { landmarks: [], faceBoundingBox: null, detectionConfidence: 0.9 };
+    const face: LiveFaceLandmarks = { landmarks: [], faceBoundingBox: null, detectionConfidence: 0.9, faceTransformMatrix: null };
     const frame = computeNeckReferenceFrame(face, pose, IMAGE_W, IMAGE_H);
     expect(frame!.method).toBe("shoulder_offset_fallback_no_face");
   });

@@ -33,6 +33,7 @@ function faceWithEars(): LiveFaceLandmarks {
     landmarks,
     faceBoundingBox: { xMin: 0.3, yMin: 0.2, xMax: 0.7, yMax: 0.8 },
     detectionConfidence: 0.9,
+    faceTransformMatrix: null,
   };
 }
 
@@ -128,6 +129,7 @@ describe("computeAnchor — necklace (mirrors ai/tests/test_geometry_anchors.py)
       landmarks: [],
       faceBoundingBox: { xMin: 0.3, yMin: -0.1, xMax: 0.7, yMax: 0.2 },
       detectionConfidence: 0.9,
+      faceTransformMatrix: null,
     };
     const withFace = computeAnchor("necklace", null, face, pose, IMAGE_W, IMAGE_H);
     const withoutFace = computeAnchor("necklace", null, null, pose, IMAGE_W, IMAGE_H);
