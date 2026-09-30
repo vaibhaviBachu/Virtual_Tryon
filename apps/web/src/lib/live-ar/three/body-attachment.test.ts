@@ -49,7 +49,10 @@ describe("resolveNeckAttachmentOrientation", () => {
   it("uses the real facial transformation matrix when available -- real yaw/pitch, not the 2D proxy", () => {
     const orientation = resolveNeckAttachmentOrientation(faceWithMatrix(0.35, -0.1), levelPose(), IMAGE_W, IMAGE_H);
     expect(orientation.method).toBe("shoulder_roll_plus_real_facial_transform_matrix");
-    expect(orientation.yawRadians).toBeCloseTo(0.35, 4);
+    // Yaw is negated by decomposeFacialTransformMatrix (head-pose.ts's own doc
+    // comment has the real-device-motivated, third-party-confirmed evidence);
+    // pitch is unaffected.
+    expect(orientation.yawRadians).toBeCloseTo(-0.35, 4);
     expect(orientation.pitchRadians).toBeCloseTo(-0.1, 4);
   });
 
@@ -80,7 +83,7 @@ describe("resolveAttachmentOrientation (generic registry)", () => {
   it("resolves 'necklace' to the real neck resolver", () => {
     const orientation = resolveAttachmentOrientation("necklace", faceWithMatrix(0.2, 0), levelPose(), IMAGE_W, IMAGE_H);
     expect(orientation).not.toBeNull();
-    expect(orientation!.yawRadians).toBeCloseTo(0.2, 4);
+    expect(orientation!.yawRadians).toBeCloseTo(-0.2, 4); // negated, see head-pose.ts's own doc comment
   });
 
   it("resolves 'earrings' to null -- not implemented deeply this phase, never a silent wrong-body-region fallback", () => {

@@ -506,6 +506,65 @@ authored attachment point), not this geometry module at all.
 
 ---
 
+## 22. Third real incident: MediaPipe's yaw/roll axis sign (Phase H.1)
+
+**Symptom, reported via a real webcam screenshot:** turning the head ~30°
+did not visibly rotate the jewellery — it looked flat/static rather than
+wrapping or foreshortening with the turn.
+
+**Diagnosis, not a guess.** `head-pose.ts`'s `decomposeFacialTransformMatrix`
+had always carried an explicit, honest flag for exactly this failure mode:
+its own docstring named the column-major-layout assumption as unverified
+against a real device and said to check it first if yaw/pitch/roll ever
+looked wrong. Rather than guessing at a fix, this was checked against a
+third-party, widely-used reference: `pmndrs/drei`'s `Facemesh` component
+(`src/web/Facemesh.tsx`), a battle-tested Three.js integration built
+specifically for this exact MediaPipe output. Its source shows
+`transform.matrix.fromArray(facialTransformationMatrix.data)` called
+**directly, with no transpose** — ruling out the column-major-layout
+hypothesis — immediately followed by:
+
+```js
+// Rotation: y and z axes are inverted
+transform.rotation.y *= -1
+transform.rotation.z *= -1
+```
+
+**Root cause:** MediaPipe's canonical face model uses a different
+rotation-axis handedness than Three.js expects for yaw (Y) and roll (Z) —
+confirmed by this independent, real-device-tested implementation applying
+the identical correction. Our own decomposition returned the raw,
+uncorrected Euler angles, so `yawRadians` was inverted-sign relative to the
+real head turn.
+
+**Fix:** `decomposeFacialTransformMatrix` now negates yaw and roll after
+decomposition (pitch is unaffected — `drei` doesn't correct it either), and
+rebuilds its returned quaternion from the corrected angles so every field of
+`DecomposedHeadPose` describes the same, consistent rotation. `roll` isn't
+actually consumed by any current caller (`resolveNeckAttachmentOrientation`
+uses the shoulder-derived roll instead), but was corrected anyway for any
+future consumer.
+
+**Verification:** all of `head-pose.test.ts`'s round-trip tests (which
+construct a matrix via Three.js's own Euler convention and check the
+decomposed result) were updated to expect the negated yaw/roll — this is a
+change in the function's documented CONTRACT, not a loosened test. A new
+test confirms the returned `quaternion` field stays internally consistent
+with the corrected Euler angles. `body-attachment.test.ts`'s two tests
+asserting a specific decomposed yaw were updated the same way. Full suite
+(648 tests, 647 real passes, the same one pre-existing unrelated flake),
+`tsc`, `eslint`, and `next build` all pass.
+
+**Scope check:** this changes ONLY the sign of the head-tracked yaw/roll fed
+into the necklace attachment transform — no geometry, texture, or occlusion
+code from §1–§21 was touched. A real webcam re-test remains the way to
+confirm the jewellery now visibly turns the correct direction with the
+wearer's head — the magnitude of the wrap effect itself is unchanged and
+still governed by the choker's own real (modest) curvature, per §18's own
+honest scope note.
+
+---
+
 ## Final status
 
 | Item | Status |
@@ -515,17 +574,18 @@ authored attachment point), not this geometry module at all.
 | UV mapping preserves original artwork exactly | **PASS** |
 | Content orientation correct (right-side up, not mirrored/flipped) | **PASS — after fix; the first shipped version FAILED this, caught by the user's real webcam test, see §4/§12** |
 | Choker never erased by clothes/shirt occlusion | **PASS — after fix; the first shipped version FAILED this too (centered mesh origin), caught by a second real webcam test, see §21** |
+| Jewellery visibly rotates/wraps as the head turns, in the correct direction | **PASS — after fix; a third real webcam test found it looked flat/static, traced to an inverted yaw/roll sign in MediaPipe's facial transform decomposition, confirmed against a third-party reference implementation, see §22** |
 | Reuses existing neck-attachment/camera/scale math (no second model) | **PASS** |
 | Reuses existing occlusion compositing (no duplicated implementation) | **PASS** |
 | Flat-2D fallback preserved and still the default for every unverified item | **PASS** |
 | Mesh built once per item, never per frame | **PASS** |
 | Representation contract generalized (gltf-3d > curved-2.5d > layered-2.5d > flat-2d) | **PASS** |
 | Only necklace/Diamond Choker implemented deeply this phase | **PASS (by design)** |
-| Automated test coverage (geometry, bridge, contract, debug) | **PASS — 647 tests, 646 passing, 1 pre-existing unrelated flake** |
+| Automated test coverage (geometry, bridge, contract, debug) | **PASS — 648 tests, 647 passing, 1 pre-existing unrelated flake** |
 | `tsc --noEmit` / `eslint` on all touched files | **PASS — 0 new errors** |
-| Real-browser verification with actual shipped code + real artwork | **PASS, with two documented gaps closed after the fact** — see §18/§21 (shape verified from the start; content-orientation and mesh-anchor-vs-2D-anchor alignment were not, and both were only caught by real webcam tests) |
+| Real-browser verification with actual shipped code + real artwork | **PASS, with documented gaps closed after the fact** — see §18/§21/§22 (shape verified from the start; content-orientation, mesh-anchor-vs-2D-anchor alignment, and head-tracking sign convention were not, and all three were only caught by real webcam tests) |
 | Measured FPS (isolated render step, software-rendered) | **~1300–2700 FPS** (well under 1ms/frame) — see §19 for scope |
-| Real-person webcam test | **PERFORMED, by the user, twice** — found the orientation bug (§12) and the clothes-erasure bug (§21); a third re-test after both fixes remains the user's own next step |
+| Real-person webcam test | **PERFORMED, by the user, three times** — found the orientation bug (§12), the clothes-erasure bug (§21), and the flat-rotation bug (§22); a fourth re-test after all three fixes remains the user's own next step |
 
 **Stop condition check:** after proper surface mapping, does it still look
 like a flat sticker? No — §18's bounding-box and edge-symmetry measurements

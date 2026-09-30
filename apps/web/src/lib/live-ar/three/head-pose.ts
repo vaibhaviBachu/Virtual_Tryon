@@ -35,6 +35,21 @@
  * true-body-surface-jewellery-attachment.md §14) shows yaw/pitch/roll are inverted
  * or swapped, check this assumption FIRST -- it is a one-line fix
  * (`.transpose()` before decomposing, or swapping which axis reads as yaw vs pitch).
+ *
+ * CONFIRMED, REAL-DEVICE-MOTIVATED SIGN CORRECTION (2026-09-30, docs/
+ * 2-5d-jewellery-surface-attachment.md's incident log): a real webcam test found
+ * the jewellery did not visibly rotate/wrap as the wearer turned their head --
+ * `THREE.Matrix4().fromArray(data)` itself needs no transpose (verified against
+ * `pmndrs/drei`'s own `Facemesh` component, a widely-used, battle-tested
+ * MediaPipe-to-Three.js integration -- it calls `fromArray` directly, unchanged),
+ * but MediaPipe's canonical face model uses a different rotation-axis handedness
+ * than Three.js expects: drei's own source (`src/web/Facemesh.tsx`) decomposes the
+ * SAME matrix this module does, then explicitly negates the Y and Z Euler
+ * components with the comment "Rotation: y and z axes are inverted" before using
+ * them. This module applies the identical correction to `yawRadians` (Y) below --
+ * `rollRadians` (Z) is corrected too, for any future consumer, even though no
+ * current caller reads it from this function (`resolveNeckAttachmentOrientation`
+ * uses the shoulder-derived roll instead, unaffected by this change).
  */
 import * as THREE from "three";
 
@@ -68,10 +83,19 @@ export function decomposeFacialTransformMatrix(data: number[] | null): Decompose
   // the angles actually fed into the render transform.
   const euler = new THREE.Euler().setFromQuaternion(quaternion, "YXZ");
 
+  // Yaw (Y) and roll (Z) axes are inverted between MediaPipe's canonical face
+  // model and Three.js's convention -- see this file's docstring for the
+  // real-device-motivated, third-party-confirmed evidence. Pitch (X) needs no
+  // correction. The returned quaternion is rebuilt from these CORRECTED angles
+  // (not the raw decomposed one) so every field of `DecomposedHeadPose`
+  // consistently describes the same, corrected rotation.
+  const correctedEuler = new THREE.Euler(euler.x, -euler.y, -euler.z, "YXZ");
+  const correctedQuaternion = new THREE.Quaternion().setFromEuler(correctedEuler);
+
   return {
-    quaternion: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
-    yawRadians: euler.y,
-    pitchRadians: euler.x,
-    rollRadians: euler.z,
+    quaternion: [correctedQuaternion.x, correctedQuaternion.y, correctedQuaternion.z, correctedQuaternion.w],
+    yawRadians: correctedEuler.y,
+    pitchRadians: correctedEuler.x,
+    rollRadians: correctedEuler.z,
   };
 }
