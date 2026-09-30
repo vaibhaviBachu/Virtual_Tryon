@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AssetWithPreviewResponse } from "@/lib/catalogue-types";
 import { loadJewelleryAssetTexture } from "@/lib/live-ar/asset-cache";
 import { startLiveCamera, stopLiveCamera, type CameraError } from "@/lib/live-ar/camera";
+import { buildTopFadedDisplayImage } from "@/lib/live-ar/jewellery-display-fade";
 import { containerMirrorTransform } from "@/lib/live-ar/coordinates";
 import { computeNecklaceDebugSnapshot, type NecklaceDebugSnapshot } from "@/lib/live-ar/debug";
 import { computeTransformedBoundingBox, estimateHeadYawAsymmetry, planCategoryRenders } from "@/lib/live-ar/geometry";
@@ -98,9 +99,16 @@ function makeSlotState(): SlotState {
  * estimated head yaw (geometry.ts's estimateHeadYawAsymmetry), which changes
  * continuously, so they are recomputed every frame in the render loop instead (see
  * jewellery-deformation.ts's file docstring on why this is still cheap). Null for
- * earrings (attachment class / neck curvature are necklace-only concepts). */
+ * earrings (attachment class / neck curvature are necklace-only concepts).
+ *
+ * `image` is a plain `CanvasImageSource` (not narrowly `HTMLImageElement`) because,
+ * for necklace-family items, it is a same-resolution CANVAS with the real-webcam-
+ * referenced top-edge fade baked in (jewellery-display-fade.ts) -- never the raw
+ * decoded `<img>` directly. Both `drawJewelleryOverlay`/`drawOccludedJewelleryOverlay`
+ * (renderer.ts) and `buildCurved25dAsset` (curved-2_5d-bridge.ts) already accept
+ * either. */
 interface LoadedJewelleryTexture {
-  image: HTMLImageElement;
+  image: CanvasImageSource;
   geometry: JewelleryAssetGeometry;
   attachmentModel: JewelleryAttachmentModel | null;
 }
@@ -113,7 +121,17 @@ function resolveLoadedTexture(
   if (category !== "necklace") {
     return { ...loaded, attachmentModel: null };
   }
-  return { ...loaded, attachmentModel: resolveNecklaceAttachmentModel(categorySlug, loaded.geometry) };
+  // Real-webcam-referenced request (a competitor's Camweara-powered site): the top
+  // of a worn necklace should fade softly into the neck/collar rather than cut off
+  // with a hard edge. Built ONCE here (asset selection changes, never per frame) --
+  // the RAW decoded image and its geometry (used for anchor/scale/mirroring) are
+  // completely untouched; only this display-only canvas carries the fade.
+  const displayImage = buildTopFadedDisplayImage(loaded.image, loaded.geometry.alphaBbox);
+  return {
+    image: displayImage,
+    geometry: loaded.geometry,
+    attachmentModel: resolveNecklaceAttachmentModel(categorySlug, loaded.geometry),
+  };
 }
 
 /** Smooths only the numeric fields of a LiveTransform, preserving `mirrored` and
@@ -834,7 +852,7 @@ export function useLiveArSession({
 
       const loaded = assetGeometryRef.current;
       let overlays: {
-        image: HTMLImageElement;
+        image: CanvasImageSource;
         transform: LiveTransform;
         opacity: number;
         strips: JewelleryStrip[] | null;

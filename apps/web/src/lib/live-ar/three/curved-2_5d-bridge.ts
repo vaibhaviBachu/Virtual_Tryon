@@ -91,14 +91,19 @@ export interface Live25dJewelleryAsset {
 
 /**
  * Builds the curved ribbon mesh from a real, already-loaded jewellery image
- * (reuses the SAME `HTMLImageElement` the existing 2D pipeline already decoded --
- * `asset-cache.ts`, never a second fetch/decode) and this module's own metadata.
- * Pure Three.js object construction -- safe to call in a real browser; NOT
- * exercised by `vitest run` only insofar as `THREE.Texture`'s actual GPU upload
- * requires a real WebGL2 context to ever be USED (construction itself needs
- * none, and IS covered by this module's own tests).
+ * (reuses the SAME image the existing 2D pipeline already decoded -- `asset-cache.ts`,
+ * never a second fetch/decode) and this module's own metadata. `image` accepts a
+ * `CanvasImageSource` (not narrowly `HTMLImageElement`) because
+ * `useLiveArSession.ts`'s `resolveLoadedTexture` passes a same-resolution CANVAS
+ * with the real-webcam-referenced top-edge display fade already baked in
+ * (`jewellery-display-fade.ts`) for necklace-family items -- the raw decoded `<img>`
+ * itself is never modified, only this display-only copy. Pure Three.js object
+ * construction -- safe to call in a real browser; NOT exercised by `vitest run` only
+ * insofar as `THREE.Texture`'s actual GPU upload requires a real WebGL2 context to
+ * ever be USED (construction itself needs none, and IS covered by this module's own
+ * tests).
  */
-export function buildCurved25dAsset(metadata: Curved25dAssetMetadata, image: HTMLImageElement): Live25dJewelleryAsset {
+export function buildCurved25dAsset(metadata: Curved25dAssetMetadata, image: CanvasImageSource): Live25dJewelleryAsset {
   const geometry = createCurvedRibbonGeometry({
     controlPointsMm: metadata.curveControlPointsMm,
     closed: metadata.curveClosed,
