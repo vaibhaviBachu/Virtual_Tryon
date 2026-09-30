@@ -63,7 +63,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/jewellery_tryon}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-jewellery-tryon}
@@ -101,10 +101,16 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/jewellery_tryon}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-jewellery-tryon}
+      # Same real bug this service silently had until now: MINIO_SECURE was never
+      # passed through at all (unlike the api service above, which already had it),
+      # so the worker always spoke plain HTTP even when MINIO_ENDPOINT pointed at a
+      # real, TLS-only host (Backblaze B2) -- every background-removal job failed
+      # with botocore.exceptions.EndpointConnectionError until this was added.
+      MINIO_SECURE: ${MINIO_SECURE:-false}
     ports:
       - "${WORKER_PORT:-2007}:8000"
     depends_on:
