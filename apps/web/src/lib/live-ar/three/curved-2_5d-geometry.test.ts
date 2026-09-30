@@ -65,6 +65,19 @@ describe("createCurvedRibbonGeometry", () => {
     expect(vAtBottom).toBeCloseTo(1, 5); // bottom of the mesh (min Y) is v=1
   });
 
+  it("REGRESSION: the mesh's local origin (Y=0) is its TOP edge, not its vertical center -- a real webcam test found clothes incorrectly erasing the choker's own upper half wherever it met a shirt collar, traced to a vertically-centered origin misaligning the occlusion system's 2D-anchor-based 'clothes may only occlude above the neck-attachment line' rule (see this function's own doc comment for the full account)", () => {
+    const geometry = createCurvedRibbonGeometry({ controlPointsMm: STRAIGHT_LINE, closed: false, heightMm: 106, segmentsU: 8, segmentsV: 4 });
+    const position = geometry.getAttribute("position");
+    let maxY = -Infinity, minY = Infinity;
+    for (let i = 0; i < position.count; i++) {
+      const y = position.getY(i);
+      if (y > maxY) maxY = y;
+      if (y < minY) minY = y;
+    }
+    expect(maxY).toBeCloseTo(0, 5); // the top edge (v=0) sits AT the origin
+    expect(minY).toBeCloseTo(-106, 0); // the bottom edge (v=1) is a full heightMm BELOW the origin
+  });
+
   it("respects configurable segment counts (Step 5 -- not hardcoded)", () => {
     const coarse = createCurvedRibbonGeometry({ controlPointsMm: STRAIGHT_LINE, closed: false, heightMm: 100, segmentsU: 4, segmentsV: 2 });
     const fine = createCurvedRibbonGeometry({ controlPointsMm: STRAIGHT_LINE, closed: false, heightMm: 100, segmentsU: 40, segmentsV: 20 });

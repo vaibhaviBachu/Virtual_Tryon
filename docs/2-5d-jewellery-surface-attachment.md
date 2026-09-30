@@ -66,6 +66,17 @@ strip. The texture already encodes the piece's real apparent thickness and
 shading from the source photograph; adding a second, geometric thickness on
 top would be redundant and was deliberately left out.
 
+**The mesh's local origin (0,0,0) is its TOP edge, not its vertical
+center** — see §21 for the real incident this fixed. `v=0` (the top row)
+sits at local Y=0; every other row extends downward (more negative Y) as
+`v` increases toward 1. This matters because
+`computeSurfaceAttachedTransformFromDimensions` positions the mesh's local
+origin at the world point corresponding to the 2D pipeline's own anchor,
+and that anchor is always the TOP of the artwork
+(`anchorSource: "default_bbox_top_center"`) — a vertically-centered origin
+(the first shipped version of this geometry) would place the mesh's
+midpoint, not its top, at that point.
+
 ## 4. UV mapping — preserving the real artwork exactly
 
 UVs are a plain planar `(u, v)` grid mapping directly onto the full texture:
@@ -439,6 +450,62 @@ pre-existing flakiness rather than a regression from any file listed in §15.
 
 ---
 
+## 21. Second real incident: vertically-centered mesh origin (Phase H.1)
+
+**Symptom, reported via real webcam screenshots, in two forms:** (1) a
+sharp-edged dark/missing rectangular block appearing mid-choker at certain
+head angles, and (2) the choker's own pixels visibly erasing wherever it
+overlapped the wearer's t-shirt collar.
+
+**Diagnosis process, not a guess.** An exhaustive synthetic sweep (isolated
+texture/material inspection, mesh-validity checks, an automated
+black-opaque-pixel scanner run against the curved mesh, the flat control, and
+a simulated occlusion pass) found **zero** reproductions — every one of those
+came back clean. That ruled out the texture/UV/material pipeline and pointed
+the investigation at the *occlusion decision itself*, specifically the
+`occlusion.ts` rule: "clothes may occlude the necklace only at or above its
+own neck-attachment line" (`transform.anchorPx.y`, the SAME point the 2D
+sprite is anchored by).
+
+**Root cause, confirmed by re-deriving the coordinate math.**
+`createCurvedRibbonGeometry` built its ribbon **vertically centered** on its
+own local origin (`yOffset` ranging from `+halfHeight` at the top to
+`-halfHeight` at the bottom). `computeSurfaceAttachedTransformFromDimensions`
+places that local origin at the world point corresponding to
+`smoothed.anchorPx` — which the 2D pipeline defines as the artwork's TOP edge
+(`asset-cache.ts`'s `anchorSource: "default_bbox_top_center"`), never its
+center. The mismatch meant the **entire top half of the rendered choker** —
+not just a thin sliver at its very top edge — fell at-or-above the
+attachment line, making it legitimately (by the rule's own logic) erasable
+by clothes exactly where a shirt collar sits. This also meant the whole
+choker rendered roughly half its own height lower on screen than the
+(already-correct) 2D sprite would.
+
+**Fix.** One line in `curved-2_5d-geometry.ts`: `yOffset = -v * heightMm`
+instead of `halfHeight - v * heightMm` — the mesh's local origin (Y=0) is now
+its TOP edge, matching the 2D anchor convention exactly, with the whole mesh
+extending downward from there.
+
+**Verified, not assumed — real-browser measurement before shipping:**
+rendering the real Diamond Choker with a 2D anchor at canvas Y=168px, the
+mesh's own rendered top edge now measures at Y=193px (a 25px residual,
+fully explained by the source PNG's own ~7% transparent top margin — the
+same margin the 2D sprite has always included) — compare this to the
+`~half the choker's own ~287px rendered height` (≈143px) offset the old,
+centered-origin version would have produced. With the fix, the choker's
+rendered body (Y=193–479) sits entirely *below* the anchor line (168),
+meaning the clothes-occlusion rule can no longer touch any of it — directly
+resolving the reported defect, confirmed by direct measurement, not by
+assuming the math checked out. A permanent regression test
+(`curved-2_5d-geometry.test.ts`) locks the top-anchor convention in place:
+the mesh's maximum Y must be ≈0 and its minimum Y must be ≈`-heightMm`.
+
+**Scope check:** the procedural GLB path (Phase D–G) is unaffected — it uses
+its own, separate `Gltf3dAssetMetadata.anchor` field (the mesh author's own
+authored attachment point), not this geometry module at all.
+
+---
+
 ## Final status
 
 | Item | Status |
@@ -447,17 +514,18 @@ pre-existing flakiness rather than a regression from any file listed in §15.
 | Real 3D curvature (not a flat sticker) — bounding box / edge-symmetry evidence | **PASS** |
 | UV mapping preserves original artwork exactly | **PASS** |
 | Content orientation correct (right-side up, not mirrored/flipped) | **PASS — after fix; the first shipped version FAILED this, caught by the user's real webcam test, see §4/§12** |
+| Choker never erased by clothes/shirt occlusion | **PASS — after fix; the first shipped version FAILED this too (centered mesh origin), caught by a second real webcam test, see §21** |
 | Reuses existing neck-attachment/camera/scale math (no second model) | **PASS** |
 | Reuses existing occlusion compositing (no duplicated implementation) | **PASS** |
 | Flat-2D fallback preserved and still the default for every unverified item | **PASS** |
 | Mesh built once per item, never per frame | **PASS** |
 | Representation contract generalized (gltf-3d > curved-2.5d > layered-2.5d > flat-2d) | **PASS** |
 | Only necklace/Diamond Choker implemented deeply this phase | **PASS (by design)** |
-| Automated test coverage (geometry, bridge, contract, debug) | **PASS — 646 tests, 645 passing, 1 pre-existing unrelated flake** |
+| Automated test coverage (geometry, bridge, contract, debug) | **PASS — 647 tests, 646 passing, 1 pre-existing unrelated flake** |
 | `tsc --noEmit` / `eslint` on all touched files | **PASS — 0 new errors** |
-| Real-browser verification with actual shipped code + real artwork | **PASS, with a documented gap** — see §18 (shape verified; content-orientation was not, and missed the flipY bug) |
+| Real-browser verification with actual shipped code + real artwork | **PASS, with two documented gaps closed after the fact** — see §18/§21 (shape verified from the start; content-orientation and mesh-anchor-vs-2D-anchor alignment were not, and both were only caught by real webcam tests) |
 | Measured FPS (isolated render step, software-rendered) | **~1300–2700 FPS** (well under 1ms/frame) — see §19 for scope |
-| Real-person webcam test | **PARTIALLY PERFORMED, by the user** — found the orientation bug (§12); a re-test after the fix remains the user's own next step |
+| Real-person webcam test | **PERFORMED, by the user, twice** — found the orientation bug (§12) and the clothes-erasure bug (§21); a third re-test after both fixes remains the user's own next step |
 
 **Stop condition check:** after proper surface mapping, does it still look
 like a flat sticker? No — §18's bounding-box and edge-symmetry measurements

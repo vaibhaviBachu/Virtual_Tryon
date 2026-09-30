@@ -75,6 +75,23 @@ export const DEFAULT_RIBBON_SEGMENTS_V = 16;
  * real Diamond Choker upside down on a real webcam -- its top row, the
  * pointed/spiked design elements, appeared at the mesh's bottom).
  *
+ * THE MESH'S LOCAL ORIGIN (0,0,0) IS ITS TOP EDGE (v=0), NOT ITS VERTICAL
+ * CENTER -- confirmed the hard way, again, via a real webcam test: the mesh's
+ * local origin is what `computeSurfaceAttachedTransformFromDimensions`
+ * (three-live-bridge.ts) positions at the world point corresponding to the 2D
+ * pipeline's own anchor, and that anchor is ALWAYS the TOP of the artwork
+ * (asset-cache.ts's `anchorSource: "default_bbox_top_center"` -- the 2D sprite
+ * is drawn hanging DOWNWARD from its top edge, never centered on its anchor).
+ * A vertically-CENTERED mesh origin (an earlier version of this file) placed the
+ * mesh's own vertical MIDPOINT at that anchor instead of its top -- which both
+ * shifted the whole rendered choker down by half its own height relative to
+ * where the 2D sprite sits, AND, more seriously, meant the occlusion system's
+ * "clothes may only occlude at/above the neck-attachment line" rule
+ * (occlusion.ts) measured "above the line" against the WRONG reference: half of
+ * the choker's own body (not just its true top edge) fell at-or-above that
+ * line, making it legitimately erasable by clothes exactly where the choker
+ * meets a shirt collar -- a real, reported defect, not a hypothetical one.
+ *
  * Non-indexed (flat per-quad winding, matching `jewellery-3d-generator/
  * primitives.ts`'s own established convention) -- normals point along the fixed
  * reference "depth" direction, correct for a single-sided textured ribbon meant to
@@ -108,12 +125,14 @@ export function createCurvedRibbonGeometry(params: CurvedRibbonParams): THREE.Bu
 
   const positions: number[] = [];
   const uvs: number[] = [];
-  const halfHeight = heightMm / 2;
 
   const vertexAt = (rowIndex: number, colIndex: number): { pos: THREE.Vector3; uv: [number, number] } => {
     const row = rows[rowIndex];
     const v = colIndex / segmentsV; // 0 at top, 1 at bottom
-    const yOffset = halfHeight - v * heightMm;
+    // Top-anchored (v=0 -> yOffset=0, AT the curve/origin), extending DOWNWARD
+    // (more negative) as v increases -- matches the 2D pipeline's own
+    // top-anchored convention exactly (see this function's own doc comment).
+    const yOffset = -v * heightMm;
     const pos = row.center.clone().addScaledVector(row.widthDir, yOffset);
     const u = rowIndex / segmentsU;
     return { pos, uv: [u, v] };
