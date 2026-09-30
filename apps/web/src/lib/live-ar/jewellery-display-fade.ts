@@ -18,13 +18,14 @@
  */
 
 /** Fraction of the asset's own visible (alpha-bbox) height, starting from its top
- * edge, over which alpha ramps from fully transparent to fully opaque. Deliberately
- * small -- this is a soft blend at the very top tips of a necklace, not a fade over
- * a large fraction of the piece. UNCALIBRATED against a real camera (the same status
- * as every other visual-only constant in this project, e.g. NECKLACE_LENGTH_OFFSET_MULTIPLIER's
- * own doc comment) -- a reasonable starting point matching the cited reference
- * image, not a measured result. */
-export const NECKLACE_TOP_FADE_FRACTION_OF_BBOX_HEIGHT = 0.08;
+ * edge, over which alpha ramps from fully transparent to fully opaque. A soft blend
+ * over the top portion of a necklace, not the whole piece -- but real feedback
+ * against the first shipped value (0.08) asked for MORE length, referencing a
+ * cropped screenshot of roughly how far down the fade should reach. UNCALIBRATED
+ * against a real camera (the same status as every other visual-only constant in
+ * this project, e.g. NECKLACE_LENGTH_OFFSET_MULTIPLIER's own doc comment) -- a
+ * reasonable adjustment matching that feedback, not a measured result. */
+export const NECKLACE_TOP_FADE_FRACTION_OF_BBOX_HEIGHT = 0.18;
 
 /**
  * Pure alpha-ramp function, independent of any canvas/DOM API so it is directly
