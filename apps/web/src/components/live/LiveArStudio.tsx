@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { getAsset, listAssets, listCategories, listJewellery } from "@/lib/catalogue-api";
 import { createLiveArCapture } from "@/lib/live-ar-api";
 import { formatLive3dDebugInfo, formatNecklaceDebugSnapshot } from "@/lib/live-ar/debug";
@@ -32,6 +32,7 @@ import type { CategorySlug } from "@/lib/live-ar/types";
 import { cn } from "@/lib/utils";
 import { useLiveArSession } from "@/components/live/useLiveArSession";
 import { BotPreview } from "@/components/live/BotPreview";
+import { JewelleryTile } from "@/components/live/JewelleryTile";
 
 // Only these two categories have a functional Live AR pipeline this milestone (spec
 // §26's "do not simultaneously implement all future jewellery categories" rule,
@@ -126,13 +127,14 @@ export function LiveArStudio() {
   const [captureState, setCaptureState] = useState<"idle" | "capturing" | "done" | "error">("idle");
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureErrorMessage, setCaptureErrorMessage] = useState<string | null>(null);
-  // Full-screen camera mode (the default landing experience, matching a real
-  // competitor's Camweara-powered try-on flow) -- the camera/canvas DOM nodes and
-  // the live session hook stay mounted the whole time either way (never torn down
-  // when toggling this), only the SURROUNDING layout/chrome changes: fullscreen
-  // shows just the camera + a small back icon; going back reveals the full
-  // category/picker/debug-tooling layout unchanged.
-  const [showPicker, setShowPicker] = useState(false);
+  // Catalogue-browse mode is the default landing experience (matching a real
+  // competitor's category-dropdown + image-grid + "on the model" layout) -- the
+  // camera/canvas DOM nodes and the live session hook stay mounted the whole time
+  // either way (never torn down when toggling this), only the SURROUNDING
+  // layout/chrome changes: fullscreen shows just the camera + a small back icon;
+  // the catalogue view hides the live camera feed (kept mounted off-screen, not
+  // unmounted) behind the category picker, image grid, and "on the model" preview.
+  const [showPicker, setShowPicker] = useState(true);
 
   useEffect(() => {
     createTryOnSession({}).then((session) => setSessionId(session.id));
@@ -299,13 +301,17 @@ export function LiveArStudio() {
 
   return (
     <div className={showPicker ? "mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row" : ""}>
-      <div className={showPicker ? "flex-1" : ""}>
+      {/* The live camera/canvas stay mounted the whole time regardless of showPicker
+          (never torn down when toggling) -- in catalogue mode this wrapper is
+          visually clipped to nothing (sr-only) rather than unmounted, so the
+          session never restarts; in full-screen mode it's a plain passthrough so
+          the Card's own fixed-position classes below take over the whole viewport. */}
+      <div className={showPicker ? "sr-only" : "contents"}>
         <Card className={cn("overflow-hidden", !showPicker && "fixed inset-0 z-40 rounded-none border-0")}>
           <div className={cn("relative w-full bg-neutral-950", showPicker ? "aspect-[4/3]" : "h-screen")}>
             {/* The full-screen camera experience's own back affordance -- the ONLY
-                way there besides the (still-present, unchanged) picker layout below.
-                Never tears down the camera/session; only this surrounding layout
-                toggles. */}
+                way there besides the catalogue layout below. Never tears down the
+                camera/session; only this surrounding layout toggles. */}
             {!showPicker && (
               <button
                 type="button"
@@ -315,23 +321,6 @@ export function LiveArStudio() {
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
                   <path d="M15 18l-6-6 6-6" />
-                </svg>
-              </button>
-            )}
-            {/* The mirror-image toggle, only shown in the picker layout -- jumps
-                straight back to the full-screen camera without re-picking anything.
-                Offset below top-3 so it never overlaps the tracking-status pill,
-                which renders at the same right-3/top-3 corner whenever tracking has
-                started. */}
-            {showPicker && (
-              <button
-                type="button"
-                onClick={() => setShowPicker(false)}
-                aria-label="View full-screen"
-                className="absolute right-3 top-11 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
                 </svg>
               </button>
             )}
@@ -488,22 +477,62 @@ export function LiveArStudio() {
               </div>
             )}
           </div>
+        </Card>
+      </div>
 
-          {showPicker && (
-          <CardContent className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex gap-2">
-              {LIVE_AR_CATEGORIES.map((c) => (
-                <Button
-                  key={c.slug}
-                  variant={category === c.slug ? "primary" : "secondary"}
-                  size="sm"
-                  onClick={() => setCategory(c.slug)}
-                >
-                  {c.label}
-                </Button>
+      <div className={showPicker ? "flex-1" : "contents"}>
+        {showPicker && (
+          <>
+            <label className="mb-4 flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-300">
+              Category
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value as CategorySlug)}
+                className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              >
+                {LIVE_AR_CATEGORIES.map((c) => (
+                  <option key={c.slug} value={c.slug}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {category === "necklace" && (
+              <p className="mb-3 text-xs text-neutral-400">
+                Tap a piece to preview it on the model, or tap the camera icon to try it on live -- pick more than
+                one to layer them (e.g. a necklace and a haaram), up to {MAX_SIMULTANEOUS_NECK_ITEMS} at once.
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+              {(category === "necklace" ? neckItems : jewelleryQuery.data?.items ?? []).map((item) => (
+                <JewelleryTile
+                  key={item.id}
+                  item={item}
+                  isSelected={category === "necklace" ? selectedNecklaceIds.includes(item.id) : item.id === selectedJewelleryId}
+                  onSelect={() => {
+                    if (category === "necklace") toggleNecklaceItem(item.id);
+                    else setSelectedJewelleryId(item.id);
+                  }}
+                  onTryOn={() => {
+                    if (category === "necklace") {
+                      setSelectedNecklaceIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+                    } else {
+                      setSelectedJewelleryId(item.id);
+                    }
+                    setShowPicker(false);
+                  }}
+                />
               ))}
+              {(category === "necklace" ? neckItems.length === 0 : (jewelleryQuery.data?.items.length ?? 0) === 0) && (
+                <p className="col-span-full text-xs text-neutral-400">No items in this category yet.</p>
+              )}
             </div>
-            <div className="flex items-center gap-3">
+
+            {/* Dev-only tooling toggles -- never part of the customer experience
+                (docs/live-ar-realism-architecture.md §6/§7/§17). */}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 className="text-xs text-neutral-400 underline-offset-2 hover:underline"
@@ -520,8 +549,6 @@ export function LiveArStudio() {
                   {showDebugOverlay ? "Hide" : "Show"} necklace debug
                 </button>
               )}
-              {/* M6.3 proof of concept -- dev-only, never part of the customer
-                  experience (docs/live-ar-realism-architecture.md §6/§7/§17). */}
               <button
                 type="button"
                 className="text-xs text-neutral-400 underline-offset-2 hover:underline"
@@ -529,8 +556,6 @@ export function LiveArStudio() {
               >
                 {showSegmentationDebug ? "Hide" : "Show"} segmentation debug
               </button>
-              {/* M6.4 -- dev-only, never part of the customer experience
-                  (docs/live-ar-realism-architecture.md §6/§7/§17). */}
               {category === "necklace" && (
                 <button
                   type="button"
@@ -540,7 +565,6 @@ export function LiveArStudio() {
                   {showOcclusionDebug ? "Hide" : "Show"} occlusion debug
                 </button>
               )}
-              {/* M6.6 spec Step 12 -- dev-only, never part of the customer experience. */}
               {category === "necklace" && (
                 <button
                   type="button"
@@ -550,8 +574,6 @@ export function LiveArStudio() {
                   {showWearComparison ? "Hide" : "Show"} wear comparison (M6.5 vs M6.6)
                 </button>
               )}
-              {/* Phase H.1 diagnostic -- dev-only. Unlike the debug toggles above, this
-                  actually disables 3D/2.5D occlusion compositing, not just its overlay. */}
               {category === "necklace" && (
                 <button
                   type="button"
@@ -562,9 +584,8 @@ export function LiveArStudio() {
                 </button>
               )}
             </div>
-          </CardContent>
-          )}
-        </Card>
+          </>
+        )}
 
         {showPicker && showDebugOverlay && category === "necklace" && (
           <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
@@ -743,62 +764,6 @@ export function LiveArStudio() {
           primaryAsset={assetWithPreviewQuery.data ?? null}
           additionalItems={category === "necklace" ? additionalNecklaceItems : []}
         />
-
-        <h2 className="mb-3 mt-6 text-sm font-medium text-neutral-500">
-          {category === "necklace" ? "Choose pieces to layer" : "Choose a piece"}
-        </h2>
-        {category === "necklace" ? (
-          <>
-            <p className="mb-2 text-[11px] text-neutral-400">
-              Pick more than one to wear them together (e.g. a necklace and a haaram) -- up to{" "}
-              {MAX_SIMULTANEOUS_NECK_ITEMS} at once.
-            </p>
-            <div className="grid grid-cols-3 gap-2 lg:grid-cols-2">
-              {neckItems.map((item) => {
-                const isSelected = selectedNecklaceIds.includes(item.id);
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => toggleNecklaceItem(item.id)}
-                    className={cn(
-                      "rounded-xl border p-2 text-left text-xs",
-                      isSelected ? "border-neutral-900 dark:border-amber-400" : "border-neutral-200 dark:border-neutral-800"
-                    )}
-                  >
-                    <span className="mr-1">{isSelected ? "☑" : "☐"}</span>
-                    {item.name}
-                    <span className="block text-[10px] text-neutral-400">{item.category.name}</span>
-                  </button>
-                );
-              })}
-              {neckItems.length === 0 && (
-                <p className="col-span-full text-xs text-neutral-400">No necklace or haaram items yet.</p>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 lg:grid-cols-2">
-            {(jewelleryQuery.data?.items ?? []).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setSelectedJewelleryId(item.id)}
-                className={cn(
-                  "rounded-xl border p-2 text-left text-xs",
-                  item.id === selectedJewelleryId
-                    ? "border-neutral-900 dark:border-amber-400"
-                    : "border-neutral-200 dark:border-neutral-800"
-                )}
-              >
-                {item.name}
-              </button>
-            ))}
-            {jewelleryQuery.data?.items.length === 0 && (
-              <p className="col-span-full text-xs text-neutral-400">No items in this category yet.</p>
-            )}
-          </div>
-        )}
       </div>
       )}
     </div>
