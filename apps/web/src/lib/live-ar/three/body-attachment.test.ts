@@ -45,8 +45,19 @@ function tiltedPose(): LivePoseLandmarks {
   return { landmarks, confidence: 0.9 };
 }
 
+/** Phase I: a pose whose shoulders carry real z depth, so `computeBodyYawRadians`
+ * (depth.ts) resolves to a real, non-null body yaw -- exercising the NEW primary
+ * path, distinct from every fixture above (which omit z entirely, exercising the
+ * fallback chain instead). */
+function poseWithShoulderDepth(leftZ: number, rightZ: number): LivePoseLandmarks {
+  const landmarks: NormalizedPoint[] = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.9 }));
+  landmarks[11] = { x: 0.65, y: 0.6, z: leftZ, visibility: 0.9 };
+  landmarks[12] = { x: 0.35, y: 0.6, z: rightZ, visibility: 0.9 };
+  return { landmarks, confidence: 0.9 };
+}
+
 describe("resolveNeckAttachmentOrientation", () => {
-  it("uses the real facial transformation matrix when available -- real yaw/pitch, not the 2D proxy", () => {
+  it("falls back to the real facial transformation matrix's own yaw+pitch when the pose has no shoulder depth (body yaw unavailable)", () => {
     const orientation = resolveNeckAttachmentOrientation(faceWithMatrix(0.35, -0.1), levelPose(), IMAGE_W, IMAGE_H);
     expect(orientation.method).toBe("shoulder_roll_plus_real_facial_transform_matrix");
     // Yaw is negated by decomposeFacialTransformMatrix (head-pose.ts's own doc
@@ -54,6 +65,27 @@ describe("resolveNeckAttachmentOrientation", () => {
     // pitch is unaffected.
     expect(orientation.yawRadians).toBeCloseTo(-0.35, 4);
     expect(orientation.pitchRadians).toBeCloseTo(-0.1, 4);
+  });
+
+  it("Phase I: prefers BODY yaw (from real shoulder depth) over face yaw when both are available -- pitch still comes from the face", () => {
+    // Left shoulder closer to camera (smaller z) than right -- a real body turn.
+    const orientation = resolveNeckAttachmentOrientation(faceWithMatrix(0.9, -0.1), poseWithShoulderDepth(-0.08, 0.03), IMAGE_W, IMAGE_H);
+    expect(orientation.method).toBe("shoulder_depth_yaw_plus_shoulder_roll_plus_facial_pitch");
+    // The face's own yaw (0.9 -> negated to -0.9) is NOT what drives this frame's
+    // yaw -- the body signal is a completely different, much smaller magnitude,
+    // proving the body path actually took over rather than coincidentally agreeing.
+    expect(orientation.yawRadians).not.toBeCloseTo(-0.9, 1);
+    expect(Number.isFinite(orientation.yawRadians)).toBe(true);
+    // Pitch is unaffected -- still the face's real pitch.
+    expect(orientation.pitchRadians).toBeCloseTo(-0.1, 4);
+  });
+
+  it("Phase I: body yaw is used even with NO face transform matrix at all (pitch falls back to 0, since there is no face-pose pitch signal to use)", () => {
+    const noFace: LiveFaceLandmarks | null = null;
+    const orientation = resolveNeckAttachmentOrientation(noFace, poseWithShoulderDepth(-0.08, 0.03), IMAGE_W, IMAGE_H);
+    expect(orientation.method).toBe("shoulder_depth_yaw_plus_shoulder_roll_plus_facial_pitch");
+    expect(orientation.pitchRadians).toBe(0);
+    expect(Number.isFinite(orientation.yawRadians)).toBe(true);
   });
 
   it("roll always comes from the real shoulder-line tilt, regardless of head pose source", () => {

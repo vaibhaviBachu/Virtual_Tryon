@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { compareRelativeDepth, computeShoulderDepthAsymmetry, safeLandmarkZ } from "@/lib/live-ar/depth";
+import { compareRelativeDepth, computeBodyYawRadians, computeShoulderDepthAsymmetry, safeLandmarkZ } from "@/lib/live-ar/depth";
 import type { LivePoseLandmarks, NormalizedPoint } from "@/lib/live-ar/types";
 
 describe("safeLandmarkZ", () => {
@@ -133,5 +133,50 @@ describe("computeShoulderDepthAsymmetry", () => {
     expect(result).not.toBeNull();
     expect(result!.targetIsCloser).toBe(false);
     expect(result!.deltaZ).toBeCloseTo(0.13, 6);
+  });
+});
+
+describe("computeBodyYawRadians", () => {
+  it("is null without a pose", () => {
+    expect(computeBodyYawRadians(null)).toBeNull();
+  });
+
+  it("is null when the pose has too few landmarks to include both shoulders", () => {
+    const pose: LivePoseLandmarks = { landmarks: Array.from({ length: 5 }, () => ({ x: 0.5, y: 0.1 })), confidence: 0.9 };
+    expect(computeBodyYawRadians(pose)).toBeNull();
+  });
+
+  it("is null when either shoulder's z is missing (frontal pose fixtures often omit z entirely) -- callers must fall back to the existing head-yaw signal", () => {
+    expect(computeBodyYawRadians(poseWithShoulderZ(undefined, undefined))).toBeNull();
+  });
+
+  it("a perfectly frontal pose (equal shoulder z) yields zero yaw", () => {
+    expect(computeBodyYawRadians(poseWithShoulderZ(0.05, 0.05))).toBeCloseTo(0, 6);
+  });
+
+  it("a real depth asymmetry produces a real, finite, non-zero yaw, with opposite-asymmetry inputs producing opposite-sign results", () => {
+    // left shoulder closer (smaller z) than right.
+    const leftForward = computeBodyYawRadians(poseWithShoulderZ(-0.08, 0.03));
+    // right shoulder closer (smaller z) than left -- the mirror-image asymmetry.
+    const rightForward = computeBodyYawRadians(poseWithShoulderZ(0.03, -0.08));
+    expect(leftForward).not.toBeNull();
+    expect(rightForward).not.toBeNull();
+    expect(Number.isFinite(leftForward!)).toBe(true);
+    expect(leftForward).not.toBeCloseTo(0, 3);
+    // Same magnitude, opposite sign, for a symmetric flip of which shoulder is forward.
+    expect(leftForward).toBeCloseTo(-rightForward!, 6);
+  });
+
+  it("larger depth asymmetry produces a larger-magnitude yaw than a smaller one, for the same shoulder separation", () => {
+    const small = computeBodyYawRadians(poseWithShoulderZ(-0.02, 0.02));
+    const large = computeBodyYawRadians(poseWithShoulderZ(-0.15, 0.15));
+    expect(Math.abs(large!)).toBeGreaterThan(Math.abs(small!));
+  });
+
+  it("is null when the shoulders have near-zero horizontal separation (a degenerate detection this formula cannot meaningfully measure rotation against)", () => {
+    const landmarks: NormalizedPoint[] = Array.from({ length: 13 }, () => ({ x: 0.5, y: 0.1, visibility: 0.9 }));
+    landmarks[11] = { x: 0.5, y: 0.4, z: -0.05, visibility: 0.9 };
+    landmarks[12] = { x: 0.500001, y: 0.4, z: 0.05, visibility: 0.9 };
+    expect(computeBodyYawRadians({ landmarks, confidence: 0.9 })).toBeNull();
   });
 });

@@ -18,6 +18,7 @@
  * choker had a real position but an almost-flat, yaw-proxy-only orientation, which
  * is why a real curved 3D object still read as "floating in front of," not "worn."
  */
+import { computeBodyYawRadians } from "@/lib/live-ar/depth";
 import { computeNecklaceRotation, estimateHeadYawAsymmetry } from "@/lib/live-ar/geometry";
 import { decomposeFacialTransformMatrix } from "@/lib/live-ar/three/head-pose";
 import { yawAsymmetryToRadians } from "@/lib/live-ar/three/three-transform";
@@ -32,27 +33,37 @@ export interface SurfaceOrientation {
    * any future caller that wants to gate on "how much do we trust this frame's
    * orientation." */
   confidence: number;
-  method: "shoulder_roll_plus_real_facial_transform_matrix" | "shoulder_roll_plus_2d_yaw_proxy_fallback";
+  method:
+    | "shoulder_depth_yaw_plus_shoulder_roll_plus_facial_pitch"
+    | "shoulder_roll_plus_real_facial_transform_matrix"
+    | "shoulder_roll_plus_2d_yaw_proxy_fallback";
 }
 
 /**
  * Step 16's own question ("should the anchor depend more on shoulders than face?"),
- * answered concretely for orientation: ROLL always comes from the real shoulder-line
+ * answered concretely for orientation. ROLL always comes from the real shoulder-line
  * tilt (`computeNecklaceRotation`, unmodified, unchanged from M6.4) -- a choker is
  * worn on the body, and the body's own visible tilt is a real, already-measured
- * signal, never the face's. YAW and PITCH come from the face's real 3D pose
- * (`decomposeFacialTransformMatrix`) when available, because this codebase has no
- * equivalent real 3D ROTATION measurement for the shoulders/torso themselves
- * (PoseLandmarker gives landmark positions, not a transformation matrix) -- using the
- * head's real yaw/pitch as the best available proxy for "how the neck itself is
- * currently turned" is a documented, named choice, not a claim that head and body
- * rotation are physically identical (see docs/true-body-surface-jewellery-
- * attachment.md §16 for the honest account of this limitation).
+ * signal, never the face's.
  *
- * Falls back to the existing M6.6/M6.8 2D yaw proxy (pitch forced to 0, exactly
- * Phase E's prior behavior) whenever the transformation matrix isn't available this
- * frame (face lost, or the matrix simply wasn't produced) -- never a crash, never a
- * fabricated angle.
+ * YAW (Phase I, docs/production-neck-attachment-and-layering.md): now BODY-derived
+ * first -- `computeBodyYawRadians` (depth.ts), from the two shoulder landmarks' own
+ * real (x, z), whenever pose tracking provides it. A worn necklace is physically
+ * attached to the torso/neck, not the face; if the wearer turns only their head while
+ * their shoulders stay put, the necklace should follow the body, not spin with the
+ * face (docs/production-neck-attachment-and-layering.md's own "head/body separation"
+ * test). PITCH still comes from the face's real 3D pose
+ * (`decomposeFacialTransformMatrix`) -- this codebase has no pose-based pitch
+ * equivalent (PoseLandmarker gives landmark positions, not a transformation matrix),
+ * so face pitch remains the best available signal for "how the neck is tilted
+ * forward/back," a documented, named choice, not a claim that head and neck pitch
+ * are identical.
+ *
+ * FALLBACK CHAIN, most to least preferred: (1) real body yaw + real face pitch; (2)
+ * no body yaw this frame (pose/shoulders/z unavailable) but a real face transform
+ * matrix exists -- fall back to the PRE-Phase-I behavior of face yaw+pitch together
+ * (Phase F's own established method, unchanged); (3) neither -- the existing M6.6/M6.8
+ * 2D yaw proxy, pitch forced to 0. Never a crash, never a fabricated angle.
  */
 export function resolveNeckAttachmentOrientation(
   face: LiveFaceLandmarks | null,
@@ -64,6 +75,18 @@ export function resolveNeckAttachmentOrientation(
   const rollRadians = (rotation.rotationDegrees * Math.PI) / 180;
 
   const headPose = decomposeFacialTransformMatrix(face?.faceTransformMatrix ?? null);
+  const bodyYawRadians = computeBodyYawRadians(pose);
+
+  if (bodyYawRadians !== null) {
+    return {
+      yawRadians: bodyYawRadians,
+      pitchRadians: headPose?.pitchRadians ?? 0,
+      rollRadians,
+      confidence: rotation.success ? 1 : 0.6,
+      method: "shoulder_depth_yaw_plus_shoulder_roll_plus_facial_pitch",
+    };
+  }
+
   if (headPose) {
     return {
       yawRadians: headPose.yawRadians,

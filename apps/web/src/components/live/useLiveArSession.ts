@@ -12,6 +12,7 @@ import { computeJewelleryStrips, type JewelleryStrip } from "@/lib/live-ar/jewel
 import { resolveNecklaceAttachmentModel, type JewelleryAttachmentModel } from "@/lib/live-ar/jewellery-attachment";
 import {
   NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH,
+  NECKLACE_LENGTH_OFFSET_MULTIPLIER,
   OCCLUSION_STALE_MASK_THRESHOLD_MS,
   SEGMENTATION_INTERVAL_MS_DEFAULT,
 } from "@/lib/live-ar/constants";
@@ -908,11 +909,22 @@ export function useLiveArSession({
       // gets its own independent tracking/smoothing slot (keyed by jewelleryId, never
       // the primary's fixed "necklace" slot) and a progressively larger vertical nudge
       // so simultaneously worn items land at visibly different depths instead of
-      // rendering on top of each other.
+      // rendering on top of each other. Phase I (docs/production-neck-attachment-and-
+      // layering.md): the per-item nudge is now scaled by that item's OWN attachment
+      // class, via the SAME NECKLACE_LENGTH_OFFSET_MULTIPLIER table
+      // computeNecklaceAnchor already uses for the primary item's length adjustment
+      // (constants.ts) -- a haaram layered under a necklace is nudged proportionally
+      // farther than another necklace would be at the same index, because it
+      // physically hangs lower, not because of where it happens to sit in the
+      // selection list. Never a fabricated number: this reuses an existing,
+      // already-flagged (UNCALIBRATED, tune against a real camera) per-class table,
+      // rather than inventing a new one.
       if (category === "necklace") {
         additionalNecklaceItemsRef.current.forEach((item, additionalIndex) => {
           const additionalLoaded = additionalGeometryRef.current.get(item.jewelleryId);
           if (!additionalLoaded) return;
+          const lengthKey = additionalLoaded.attachmentModel?.necklaceLengthKey ?? "medium";
+          const lengthMultiplier = NECKLACE_LENGTH_OFFSET_MULTIPLIER[lengthKey] ?? 1;
           const plans = planCategoryRenders(
             "necklace",
             additionalLoaded.geometry,
@@ -923,7 +935,7 @@ export function useLiveArSession({
             necklaceLength ?? additionalLoaded.attachmentModel?.necklaceLengthKey ?? null,
             debugNeckFractionOverrideRef.current ?? undefined,
             debugNeckHorizontalOffsetOverrideRef.current ?? undefined,
-            (additionalIndex + 1) * NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH
+            (additionalIndex + 1) * NECKLACE_LAYER_SPACING_FRACTION_OF_SHOULDER_WIDTH * lengthMultiplier
           );
           const slotKey = `necklace:${item.jewelleryId}`;
           let slot = slotsRef.current.get(slotKey);

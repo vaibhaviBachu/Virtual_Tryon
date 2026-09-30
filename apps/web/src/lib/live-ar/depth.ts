@@ -87,3 +87,54 @@ export function computeShoulderDepthAsymmetry(pose: LivePoseLandmarks | null): R
   if (landmarks.length <= Math.max(LEFT_SHOULDER_IDX, RIGHT_SHOULDER_IDX)) return null;
   return compareRelativeDepth(landmarks[RIGHT_SHOULDER_IDX], landmarks[LEFT_SHOULDER_IDX]);
 }
+
+/**
+ * Phase I (docs/production-neck-attachment-and-layering.md): the "future perspective
+ * phase" this file's own docstring named as `computeShoulderDepthAsymmetry`'s eventual
+ * consumer -- a real BODY yaw estimate, derived from the two shoulder landmarks' own
+ * normalized (x, z), never from the face. This is what lets a worn necklace follow the
+ * torso instead of rotating exactly with the head when only the head turns.
+ *
+ * DERIVATION: both shoulders' (x, z) are in the SAME PoseLandmarker-normalized space
+ * (hip-midpoint z origin, roughly x-scale magnitude -- this file's own verified
+ * convention, above). The shoulder line's projection onto the horizontal (x, z) plane
+ * is the vector `(left.x - right.x, left.z - right.z)`. In a neutral, camera-facing
+ * pose this vector points purely along +x (dz ~ 0, matching this project's own
+ * established "left shoulder (11) has larger x than right (12) in an unmirrored,
+ * front-facing frame" convention -- see body-reference.test.ts's own fixtures). As the
+ * torso rotates around the vertical axis, this vector rotates within that plane;
+ * `atan2(dz, dx)` recovers that rotation angle directly from real, already-tracked
+ * landmark data -- no anthropometric constant, no invented number.
+ *
+ * HONEST, UNVERIFIED SIGN (no real camera/device exists in this environment to confirm
+ * it -- flagged exactly as prominently as head-pose.ts's own equivalent risk, which
+ * *did* turn out to need a sign correction and was a clean one-line fix specifically
+ * because it was isolated like this): whether a POSITIVE result here should mean "the
+ * torso turned the same way a positive, corrected face yaw does" has not been checked
+ * against a live body turn. If a real webcam test shows the necklace's yaw-driven
+ * curvature/foreshortening reacts backwards specifically for BODY-only rotation
+ * (shoulders turning, e.g. Section 21's body-movement test), negate this function's
+ * return value -- this is the one place to change.
+ *
+ * Returns `null` when either shoulder is missing/degenerate (near-zero horizontal
+ * separation) or lacks a finite z -- callers must fall back to the existing head-yaw
+ * signal (`resolveNeckAttachmentOrientation`'s own fallback chain), never a fabricated
+ * angle.
+ */
+export function computeBodyYawRadians(pose: LivePoseLandmarks | null): number | null {
+  if (pose === null) return null;
+  const { landmarks } = pose;
+  if (landmarks.length <= Math.max(LEFT_SHOULDER_IDX, RIGHT_SHOULDER_IDX)) return null;
+  const left = landmarks[LEFT_SHOULDER_IDX];
+  const right = landmarks[RIGHT_SHOULDER_IDX];
+  const leftZ = safeLandmarkZ(left);
+  const rightZ = safeLandmarkZ(right);
+  if (leftZ === null || rightZ === null) return null;
+  const dx = left.x - right.x;
+  const dz = leftZ - rightZ;
+  // A near-zero horizontal separation (shoulders nearly overlapping in x -- an
+  // extreme/degenerate detection, not a real frontal or profile pose this formula was
+  // derived for) has no meaningful "neutral direction" to measure rotation against.
+  if (Math.abs(dx) < 1e-4) return null;
+  return Math.atan2(dz, dx);
+}
