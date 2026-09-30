@@ -126,6 +126,13 @@ export function LiveArStudio() {
   const [captureState, setCaptureState] = useState<"idle" | "capturing" | "done" | "error">("idle");
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureErrorMessage, setCaptureErrorMessage] = useState<string | null>(null);
+  // Full-screen camera mode (the default landing experience, matching a real
+  // competitor's Camweara-powered try-on flow) -- the camera/canvas DOM nodes and
+  // the live session hook stay mounted the whole time either way (never torn down
+  // when toggling this), only the SURROUNDING layout/chrome changes: fullscreen
+  // shows just the camera + a small back icon; going back reveals the full
+  // category/picker/debug-tooling layout unchanged.
+  const [showPicker, setShowPicker] = useState(false);
 
   useEffect(() => {
     createTryOnSession({}).then((session) => setSessionId(session.id));
@@ -291,10 +298,44 @@ export function LiveArStudio() {
   const maskCapturedAtMs = session.occlusionDebugInfo?.maskCapturedAtMs ?? null;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row">
-      <div className="flex-1">
-        <Card className="overflow-hidden">
-          <div className="relative aspect-[4/3] w-full bg-neutral-950">
+    <div className={showPicker ? "mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row" : ""}>
+      <div className={showPicker ? "flex-1" : ""}>
+        <Card className={cn("overflow-hidden", !showPicker && "fixed inset-0 z-40 rounded-none border-0")}>
+          <div className={cn("relative w-full bg-neutral-950", showPicker ? "aspect-[4/3]" : "h-screen")}>
+            {/* The full-screen camera experience's own back affordance -- the ONLY
+                way there besides the (still-present, unchanged) picker layout below.
+                Never tears down the camera/session; only this surrounding layout
+                toggles. */}
+            {!showPicker && (
+              <button
+                type="button"
+                onClick={() => setShowPicker(true)}
+                aria-label="Back to pick jewellery"
+                className="absolute left-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+            )}
+            {/* The mirror-image toggle, only shown in the picker layout -- jumps
+                straight back to the full-screen camera without re-picking anything.
+                Offset below top-3 so it never overlaps the tracking-status pill,
+                which renders at the same right-3/top-3 corner whenever tracking has
+                started. */}
+            {showPicker && (
+              <button
+                type="button"
+                onClick={() => setShowPicker(false)}
+                aria-label="View full-screen"
+                className="absolute right-3 top-11 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                </svg>
+              </button>
+            )}
+
             {cameraBlocked ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-neutral-300">
                 <p>{session.cameraError?.message ?? "The camera is unavailable."}</p>
@@ -303,6 +344,30 @@ export function LiveArStudio() {
               <div className="relative h-full w-full" style={{ transform: session.mirrorTransform }}>
                 <video ref={session.videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
                 <canvas ref={session.canvasRef} className="absolute inset-0 h-full w-full object-cover" />
+              </div>
+            )}
+
+            {/* The one customer-facing action that must survive in BOTH layouts --
+                floating here (never inside the picker-only CardContent below) so it's
+                never lost when full-screen. */}
+            {!isLoadingPipeline && !cameraBlocked && (
+              <div className="absolute bottom-3 right-3 z-20 flex flex-col items-end gap-2">
+                {captureState === "done" && captureUrl && (
+                  <a
+                    href={captureUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-full bg-black/60 px-3 py-1 text-xs text-white underline underline-offset-2"
+                  >
+                    Saved -- view your capture
+                  </a>
+                )}
+                {captureState === "error" && captureErrorMessage && (
+                  <p className="max-w-[220px] rounded-full bg-black/60 px-3 py-1 text-right text-xs text-red-300">{captureErrorMessage}</p>
+                )}
+                <Button onClick={handleCapture} disabled={captureState === "capturing"}>
+                  {captureState === "capturing" ? "Saving…" : "Capture"}
+                </Button>
               </div>
             )}
 
@@ -424,6 +489,7 @@ export function LiveArStudio() {
             )}
           </div>
 
+          {showPicker && (
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex gap-2">
               {LIVE_AR_CATEGORIES.map((c) => (
@@ -495,14 +561,12 @@ export function LiveArStudio() {
                   {disable3dOcclusionForDebug ? "Re-enable" : "Disable"} 3D/2.5D occlusion (diagnostic)
                 </button>
               )}
-              <Button onClick={handleCapture} disabled={isLoadingPipeline || captureState === "capturing"}>
-                {captureState === "capturing" ? "Saving…" : "Capture"}
-              </Button>
             </div>
           </CardContent>
+          )}
         </Card>
 
-        {showDebugOverlay && category === "necklace" && (
+        {showPicker && showDebugOverlay && category === "necklace" && (
           <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
             <label className="flex items-center gap-3">
               <span className="whitespace-nowrap">
@@ -571,7 +635,7 @@ export function LiveArStudio() {
           </div>
         )}
 
-        {showDebugOverlay && category === "necklace" && (
+        {showPicker && showDebugOverlay && category === "necklace" && (
           <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
             <label className="flex items-center gap-3">
               <span className="whitespace-nowrap">
@@ -642,7 +706,7 @@ export function LiveArStudio() {
           </div>
         )}
 
-        {showDebugOverlay && category === "necklace" && session.debugSnapshot && (
+        {showPicker && showDebugOverlay && category === "necklace" && session.debugSnapshot && (
           <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-lime-300">
             {formatNecklaceDebugSnapshot(session.debugSnapshot)}
           </pre>
@@ -651,13 +715,13 @@ export function LiveArStudio() {
         {/* Phase 2.5D Step 21: which representation (flat-2D / curved-2.5D / gltf-3D)
             actually produced this frame -- see useLiveArSession.ts's own live3dDebugInfo
             doc comment for exactly what "none" vs a real mode means. */}
-        {showDebugOverlay && category === "necklace" && (
+        {showPicker && showDebugOverlay && category === "necklace" && (
           <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-sky-300">
             {formatLive3dDebugInfo(session.live3dDebugInfo)}
           </pre>
         )}
 
-        {captureState === "done" && captureUrl && (
+        {showPicker && captureState === "done" && captureUrl && (
           <p className="mt-3 text-sm text-neutral-500">
             Saved.{" "}
             <a href={captureUrl} target="_blank" rel="noreferrer" className="underline">
@@ -666,11 +730,12 @@ export function LiveArStudio() {
             .
           </p>
         )}
-        {captureState === "error" && captureErrorMessage && (
+        {showPicker && captureState === "error" && captureErrorMessage && (
           <p className="mt-3 text-sm text-red-500">{captureErrorMessage}</p>
         )}
       </div>
 
+      {showPicker && (
       <div className="w-full lg:w-72">
         <h2 className="mb-3 text-sm font-medium text-neutral-500">On the model</h2>
         <BotPreview
@@ -735,6 +800,7 @@ export function LiveArStudio() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
