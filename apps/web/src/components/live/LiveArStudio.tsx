@@ -33,14 +33,7 @@ import { cn } from "@/lib/utils";
 import { useLiveArSession } from "@/components/live/useLiveArSession";
 import { BotPreview } from "@/components/live/BotPreview";
 import { JewelleryTile } from "@/components/live/JewelleryTile";
-
-// Only these two categories have a functional Live AR pipeline this milestone (spec
-// §26's "do not simultaneously implement all future jewellery categories" rule,
-// mirrored from Milestone 4's FUNCTIONAL_CATEGORY_SLUGS).
-const LIVE_AR_CATEGORIES: { slug: CategorySlug; label: string }[] = [
-  { slug: "earrings", label: "Earrings" },
-  { slug: "necklace", label: "Necklace" },
-];
+import { HeroIntro } from "@/components/live/HeroIntro";
 
 const TRACKING_STATUS_LABEL: Record<string, string> = {
   TRACKING_GOOD: "Tracking",
@@ -61,7 +54,7 @@ const TRACKING_STATUS_LABEL: Record<string, string> = {
 const MAX_SIMULTANEOUS_NECK_ITEMS = 3;
 
 export function LiveArStudio() {
-  const [category, setCategory] = useState<CategorySlug>("earrings");
+  const [category, setCategory] = useState<CategorySlug>("necklace");
   const [selectedJewelleryId, setSelectedJewelleryId] = useState<string | null>(null);
   // Necklace mode supports wearing multiple neck items at once (e.g. a short necklace
   // together with a long haaram) -- see docs/live-ar-architecture.md. Earrings mode
@@ -69,6 +62,12 @@ export function LiveArStudio() {
   // the first entry is the "primary" item (reuses the existing single-asset plumbing
   // below), everything after it is layered further down the neck.
   const [selectedNecklaceIds, setSelectedNecklaceIds] = useState<string[]>([]);
+  // Refines the necklace-mode grid to a real catalogue sub-slice -- "all" (the
+  // existing default: necklace + haaram combined), or just one of those two real
+  // category slugs. Deliberately NOT the mockup's full Choker/Temple/Layered/Pendant
+  // tag set -- those aren't categories or any other classification this catalogue
+  // actually has data for, so a pill for them would filter nothing (dishonest UI).
+  const [necklaceFilter, setNecklaceFilter] = useState<"all" | "necklace" | "haaram" | "jewellery_set">("necklace");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showPerfOverlay, setShowPerfOverlay] = useState(false);
   // Necklace geometry debug mode (temporary diagnostic tooling -- see debug.ts):
@@ -135,7 +134,18 @@ export function LiveArStudio() {
   // the catalogue view hides the live camera feed (kept mounted off-screen, not
   // unmounted) behind the category picker, image grid, and "on the model" preview.
   const [showPicker, setShowPicker] = useState(true);
-
+  // Dev-only tooling (performance/segmentation/occlusion/wear-comparison overlays and
+  // their toggle row) is hidden from the customer-facing page entirely by default --
+  // spec: "these MUST NOT be visible on the normal customer-facing UI... but must
+  // remain accessible through the appropriate development/debug mechanism." That
+  // mechanism here is a `?debug=1` URL flag, checked once after mount (so the
+  // server-rendered and first-client-render markup match, avoiding a hydration
+  // mismatch) -- nothing is deleted, every debug feature still works exactly as
+  // before once this is on.
+  const [debugAllowed, setDebugAllowed] = useState(false);
+  useEffect(() => {
+    setDebugAllowed(new URLSearchParams(window.location.search).get("debug") === "1");
+  }, []);
   useEffect(() => {
     createTryOnSession({}).then((session) => setSessionId(session.id));
   }, []);
@@ -152,6 +162,15 @@ export function LiveArStudio() {
     () => categoriesQuery.data?.find((c) => c.slug === "haaram")?.id ?? null,
     [categoriesQuery.data]
   );
+  // Jewellery Set items are catalogued as a full look (necklace + earrings + ...), but
+  // this catalogue only has ONE photo per item, so -- same as Haaram above -- it's
+  // worn via the plain necklace attachment point, not a real multi-piece anchor.
+  // Anything added under this category in admin shows up here automatically, same as
+  // every other merged category.
+  const jewellerySetCategoryId = useMemo(
+    () => categoriesQuery.data?.find((c) => c.slug === "jewellery_set")?.id ?? null,
+    [categoriesQuery.data]
+  );
 
   const jewelleryQuery = useQuery({
     queryKey: ["live-ar-jewellery", activeCategoryId],
@@ -163,11 +182,30 @@ export function LiveArStudio() {
     queryFn: () => listJewellery({ categoryId: haaramCategoryId ?? undefined, page: 1, pageSize: 24 }),
     enabled: category === "necklace" && haaramCategoryId !== null,
   });
-  // Necklace mode's full pickable list: plain necklace items plus haaram items,
-  // combined -- see selectedNecklaceIds above.
+  const jewellerySetItemsQuery = useQuery({
+    queryKey: ["live-ar-jewellery", jewellerySetCategoryId],
+    queryFn: () => listJewellery({ categoryId: jewellerySetCategoryId ?? undefined, page: 1, pageSize: 24 }),
+    enabled: category === "necklace" && jewellerySetCategoryId !== null,
+  });
+  // Necklace mode's full pickable list: plain necklace items plus haaram plus
+  // jewellery-set items, combined -- see selectedNecklaceIds above.
   const neckItems = useMemo(
-    () => (category === "necklace" ? [...(jewelleryQuery.data?.items ?? []), ...(haaramItemsQuery.data?.items ?? [])] : []),
-    [category, jewelleryQuery.data, haaramItemsQuery.data]
+    () =>
+      category === "necklace"
+        ? [
+            ...(jewelleryQuery.data?.items ?? []),
+            ...(haaramItemsQuery.data?.items ?? []),
+            ...(jewellerySetItemsQuery.data?.items ?? []),
+          ]
+        : [],
+    [category, jewelleryQuery.data, haaramItemsQuery.data, jewellerySetItemsQuery.data]
+  );
+  // The grid's actual visible list -- neckItems filtered down to the active pill (see
+  // necklaceFilter above). Selection/layering still operates over the full neckItems
+  // list elsewhere (an already-selected item stays worn even if a filter hides its tile).
+  const visibleNeckItems = useMemo(
+    () => (necklaceFilter === "all" ? neckItems : neckItems.filter((item) => item.category.slug === necklaceFilter)),
+    [neckItems, necklaceFilter]
   );
 
   // Switching jewellery never restarts the camera or reloads the page (spec §12/§20):
@@ -263,13 +301,13 @@ export function LiveArStudio() {
     primaryPhysicalWidthMm: primaryJewelleryItem?.physical_width_mm ?? null,
     additionalNecklaceItems: category === "necklace" ? additionalNecklaceItems : [],
     debugEnabled: showDebugOverlay,
-    // While the debug panel is open, the slider previews live (even before it's saved).
-    // Otherwise, fall back to whatever's been saved for this browser (if anything) --
-    // this is what makes "drag it, click Done" actually stick for ordinary use, not
-    // just while the debug panel happens to be open.
-    debugNeckFractionOverride: category === "necklace" ? (showDebugOverlay ? neckFractionPreview : savedNeckFraction) : null,
-    debugNeckHorizontalOffsetOverride:
-      category === "necklace" ? (showDebugOverlay ? neckHorizontalOffsetPreview : savedNeckHorizontalOffset) : null,
+    // Always the live preview value (which itself starts from whatever's saved for
+    // this browser, or the automatic default) -- so the arrow/drag calibration box
+    // below updates the ACTUAL live camera in real time, not just while the dev debug
+    // panel happens to be open. This is what makes "drag it, click Save" stick for
+    // ordinary use.
+    debugNeckFractionOverride: category === "necklace" ? neckFractionPreview : null,
+    debugNeckHorizontalOffsetOverride: category === "necklace" ? neckHorizontalOffsetPreview : null,
     showSegmentationDebug,
     showOcclusionDebug,
     showWearComparison,
@@ -300,7 +338,7 @@ export function LiveArStudio() {
   const maskCapturedAtMs = session.occlusionDebugInfo?.maskCapturedAtMs ?? null;
 
   return (
-    <div className={showPicker ? "mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row" : ""}>
+    <div className={showPicker ? "mx-auto flex max-w-7xl flex-col gap-8 px-4 pb-8 pt-6 sm:px-6 lg:flex-row lg:items-start lg:px-8" : ""}>
       {/* The live camera/canvas stay mounted the whole time regardless of showPicker
           (never torn down when toggling) -- in catalogue mode this wrapper is
           visually clipped to nothing (sr-only) rather than unmounted, so the
@@ -380,7 +418,8 @@ export function LiveArStudio() {
               </div>
             )}
 
-            {showPerfOverlay && (
+
+            {debugAllowed && showPerfOverlay && (
               <div className="absolute left-3 top-3 rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-lime-300">
                 <div>{formatPerformanceOverlayText(session.performance)}</div>
                 {/* 2026-09-24 real-device review Step 12: split "Tracking" into its
@@ -483,55 +522,76 @@ export function LiveArStudio() {
       <div className={showPicker ? "flex-1" : "contents"}>
         {showPicker && (
           <>
-            <label className="mb-4 flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-300">
-              Category
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value as CategorySlug)}
-                className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
-              >
-                {LIVE_AR_CATEGORIES.map((c) => (
-                  <option key={c.slug} value={c.slug}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <HeroIntro />
+
+            <div className="mb-4 flex flex-wrap gap-2 overflow-x-auto">
+              {(
+                [
+                  { label: "Necklace", active: category === "necklace" && necklaceFilter === "necklace", onClick: () => { setCategory("necklace"); setNecklaceFilter("necklace"); } },
+                  { label: "Haaram", active: category === "necklace" && necklaceFilter === "haaram", onClick: () => { setCategory("necklace"); setNecklaceFilter("haaram"); } },
+                  { label: "Jewellery Set", active: category === "necklace" && necklaceFilter === "jewellery_set", onClick: () => { setCategory("necklace"); setNecklaceFilter("jewellery_set"); } },
+                  { label: "All", active: category === "necklace" && necklaceFilter === "all", onClick: () => { setCategory("necklace"); setNecklaceFilter("all"); } },
+                  { label: "Earrings", active: category === "earrings", onClick: () => setCategory("earrings") },
+                ] as const
+              ).map((pill) => (
+                <button
+                  key={pill.label}
+                  type="button"
+                  onClick={pill.onClick}
+                  className={cn(
+                    "flex-none rounded-full px-4 py-2 text-base font-bold transition-colors",
+                    pill.active ? "bg-[#C90016] text-white" : "bg-[#F8EEE5] text-neutral-700 hover:bg-[#F0E0D4]"
+                  )}
+                >
+                  {pill.label}
+                </button>
+              ))}
+            </div>
 
             {category === "necklace" && (
-              <p className="mb-3 text-xs text-neutral-400">
+              <p className="mb-3 text-sm font-bold text-neutral-600">
                 Tap a piece to preview it on the model, or tap the camera icon to try it on live -- pick more than
                 one to layer them (e.g. a necklace and a haaram), up to {MAX_SIMULTANEOUS_NECK_ITEMS} at once.
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-              {(category === "necklace" ? neckItems : jewelleryQuery.data?.items ?? []).map((item) => (
-                <JewelleryTile
-                  key={item.id}
-                  item={item}
-                  isSelected={category === "necklace" ? selectedNecklaceIds.includes(item.id) : item.id === selectedJewelleryId}
-                  onSelect={() => {
-                    if (category === "necklace") toggleNecklaceItem(item.id);
-                    else setSelectedJewelleryId(item.id);
-                  }}
-                  onTryOn={() => {
-                    if (category === "necklace") {
-                      setSelectedNecklaceIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
-                    } else {
-                      setSelectedJewelleryId(item.id);
-                    }
-                    setShowPicker(false);
-                  }}
-                />
-              ))}
-              {(category === "necklace" ? neckItems.length === 0 : (jewelleryQuery.data?.items.length ?? 0) === 0) && (
-                <p className="col-span-full text-xs text-neutral-400">No items in this category yet.</p>
-              )}
+            {/* Fixed-height, internally-scrolling grid -- so a longer catalogue (6+
+                items) scrolls ONLY the tiles, never the page itself. Before this, the
+                whole page grew taller than the viewport and scrolled, which dragged
+                the "on the model" panel (a normal flow sibling, self-stretch to match
+                this column's height) along with it and made the layout feel like it
+                was rearranging itself. */}
+            <div className="max-h-[56vh] overflow-y-auto overscroll-contain pr-1">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                {(category === "necklace" ? visibleNeckItems : jewelleryQuery.data?.items ?? []).map((item) => (
+                  <JewelleryTile
+                    key={item.id}
+                    item={item}
+                    isSelected={category === "necklace" ? selectedNecklaceIds.includes(item.id) : item.id === selectedJewelleryId}
+                    onSelect={() => {
+                      if (category === "necklace") toggleNecklaceItem(item.id);
+                      else setSelectedJewelleryId(item.id);
+                    }}
+                    onTryOn={() => {
+                      if (category === "necklace") {
+                        setSelectedNecklaceIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+                      } else {
+                        setSelectedJewelleryId(item.id);
+                      }
+                      setShowPicker(false);
+                    }}
+                  />
+                ))}
+                {(category === "necklace" ? visibleNeckItems.length === 0 : (jewelleryQuery.data?.items.length ?? 0) === 0) && (
+                  <p className="col-span-full text-xs text-neutral-400">No items in this category yet.</p>
+                )}
+              </div>
             </div>
 
             {/* Dev-only tooling toggles -- never part of the customer experience
-                (docs/live-ar-realism-architecture.md §6/§7/§17). */}
+                (docs/live-ar-realism-architecture.md §6/§7/§17). Only reachable via
+                ?debug=1 -- see debugAllowed above. */}
+            {debugAllowed && (
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 type="button"
@@ -584,10 +644,11 @@ export function LiveArStudio() {
                 </button>
               )}
             </div>
+            )}
           </>
         )}
 
-        {showPicker && showDebugOverlay && category === "necklace" && (
+        {showPicker && debugAllowed && showDebugOverlay && category === "necklace" && (
           <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
             <label className="flex items-center gap-3">
               <span className="whitespace-nowrap">
@@ -656,7 +717,7 @@ export function LiveArStudio() {
           </div>
         )}
 
-        {showPicker && showDebugOverlay && category === "necklace" && (
+        {showPicker && debugAllowed && showDebugOverlay && category === "necklace" && (
           <div className="mt-3 rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
             <label className="flex items-center gap-3">
               <span className="whitespace-nowrap">
@@ -727,7 +788,7 @@ export function LiveArStudio() {
           </div>
         )}
 
-        {showPicker && showDebugOverlay && category === "necklace" && session.debugSnapshot && (
+        {showPicker && debugAllowed && showDebugOverlay && category === "necklace" && session.debugSnapshot && (
           <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-lime-300">
             {formatNecklaceDebugSnapshot(session.debugSnapshot)}
           </pre>
@@ -736,7 +797,7 @@ export function LiveArStudio() {
         {/* Phase 2.5D Step 21: which representation (flat-2D / curved-2.5D / gltf-3D)
             actually produced this frame -- see useLiveArSession.ts's own live3dDebugInfo
             doc comment for exactly what "none" vs a real mode means. */}
-        {showPicker && showDebugOverlay && category === "necklace" && (
+        {showPicker && debugAllowed && showDebugOverlay && category === "necklace" && (
           <pre className="mt-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-[10px] leading-relaxed text-sky-300">
             {formatLive3dDebugInfo(session.live3dDebugInfo)}
           </pre>
@@ -757,13 +818,47 @@ export function LiveArStudio() {
       </div>
 
       {showPicker && (
-      <div className="w-full lg:w-72">
-        <h2 className="mb-3 text-sm font-medium text-neutral-500">On the model</h2>
+      <div
+        // Fixed position chosen by hand via the (now-removed) nudge buttons --
+        // deliberately `lg:` only. That offset was calibrated against the desktop
+        // 420px-wide sidebar layout; applied unconditionally it pushed the whole panel
+        // off-screen to the right on mobile (where this panel is full-width and
+        // stacked below the catalogue instead), since `transform` doesn't trigger
+        // normal responsive reflow the way margin/padding would.
+        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:w-[420px] lg:translate-x-[232px] lg:translate-y-[136px] lg:self-stretch"
+      >
+        <h2 className="sr-only">On the model</h2>
         <BotPreview
           category={category}
           primaryAsset={assetWithPreviewQuery.data ?? null}
           additionalItems={category === "necklace" ? additionalNecklaceItems : []}
+          neckFractionOverride={neckFractionPreview}
+          neckHorizontalOffsetOverride={neckHorizontalOffsetPreview}
         />
+
+        {/* Decorative only -- no handwritten-script font/illustration assets exist in
+            this project, so this is a tasteful approximation of the brand mockup's
+            corner treatment with the existing serif display font, not a literal
+            reproduction. */}
+        <p className="pointer-events-none absolute right-5 top-6 text-right font-[family-name:var(--font-display)] text-lg italic leading-tight text-neutral-700/80 [text-shadow:0_1px_2px_rgba(255,255,255,0.6)]">
+          Traditional
+          <br />
+          Elegance
+          <br />
+          Reimagined
+          <span className="mt-1 block h-0.5 w-14 rounded-full bg-[#C90016]" />
+        </p>
+
+        {/* The model preview above is already always-visible (not behind a toggle), so
+            this button has nothing to "open" -- it's a non-interactive label matching
+            the mockup's pill, not a fabricated feature. */}
+        <span className="pointer-events-none absolute bottom-5 right-5 flex items-center gap-2 rounded-full bg-white/90 px-4 py-2 text-xs font-medium text-neutral-800 shadow-sm backdrop-blur">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          View on Model
+        </span>
       </div>
       )}
     </div>

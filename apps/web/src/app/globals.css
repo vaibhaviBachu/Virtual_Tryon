@@ -27,3 +27,36 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+
+/* Landing-page scroll reveal (app/page.tsx's <Reveal>) -- a plain opacity/translate
+   transition toggled by a class an IntersectionObserver adds, no animation library. */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Cursor-following warm spotlight (app/page.tsx) -- a soft radial glow, never a bright
+   circle. --spot-x/--spot-y are set directly from a mousemove listener (no re-render). */
+.spotlight {
+  background: radial-gradient(
+    600px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    rgba(252, 211, 77, 0.06),
+    transparent 70%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .spotlight {
+    display: none;
+  }
+}

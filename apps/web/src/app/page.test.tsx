@@ -18,7 +18,7 @@ describe("Landing page", () => {
     // text (accessible to screen readers) rather than a separate visible <span> --
     // see apps/web/public/category-icons.
     expect(screen.getByAltText("Earrings")).toBeInTheDocument();
-    expect(screen.getByAltText("Necklaces")).toBeInTheDocument();
+    expect(screen.getByAltText("Necklace")).toBeInTheDocument();
     expect(screen.getByAltText("Rings")).toBeInTheDocument();
   });
 });
