@@ -519,7 +519,11 @@ export function LiveArStudio() {
         </Card>
       </div>
 
-      <div className={showPicker ? "flex-1" : "contents"}>
+      {/* lg:pr reserves the same width the now lg:fixed model panel occupies (420px +
+          its 96px/right-24 offset from the viewport edge + a gap), since `fixed`
+          removes it from this flex row entirely -- without this, the catalogue grid
+          would spread under where the panel visually sits. */}
+      <div className={showPicker ? "flex-1 lg:pr-[550px]" : "contents"}>
         {showPicker && (
           <>
             <HeroIntro />
@@ -819,13 +823,19 @@ export function LiveArStudio() {
 
       {showPicker && (
       <div
-        // Fixed position chosen by hand via the (now-removed) nudge buttons --
-        // deliberately `lg:` only. That offset was calibrated against the desktop
-        // 420px-wide sidebar layout; applied unconditionally it pushed the whole panel
-        // off-screen to the right on mobile (where this panel is full-width and
-        // stacked below the catalogue instead), since `transform` doesn't trigger
-        // normal responsive reflow the way margin/padding would.
-        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:w-[420px] lg:translate-x-[232px] lg:translate-y-[136px] lg:self-stretch"
+        // Positioned relative to the VIEWPORT (lg:fixed), not the flex layout, and
+        // deliberately `lg:` only. The previous version used `transform: translate`
+        // relative to this panel's own in-flow flex position -- but that in-flow
+        // position itself shifts with the browser window's width (it sits right after
+        // a `flex-1` sibling whose width is whatever's left over), so a fixed-pixel
+        // translate only lined up with the archway photo behind it at the ONE window
+        // width it was tuned against, and visibly drifted at any other width (this is
+        // exactly what moved between your localhost test and the real deployment).
+        // `fixed` instead anchors it to the viewport's own corner, the same coordinate
+        // system the fixed background photo already uses, so the two stay aligned
+        // across every window size without re-tuning. On mobile (below `lg`) this is
+        // plain static flow, same as before.
+        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:fixed lg:right-24 lg:top-40 lg:h-[600px] lg:w-[420px]"
       >
         <h2 className="sr-only">On the model</h2>
         <BotPreview
