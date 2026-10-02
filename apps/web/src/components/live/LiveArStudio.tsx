@@ -823,22 +823,26 @@ export function LiveArStudio() {
 
       {showPicker && (
       <div
-        // Positioned relative to the VIEWPORT (lg:fixed), not the flex layout, and
-        // deliberately `lg:` only. The previous version used `transform: translate`
-        // relative to this panel's own in-flow flex position -- but that in-flow
-        // position itself shifts with the browser window's width (it sits right after
-        // a `flex-1` sibling whose width is whatever's left over), so a fixed-pixel
-        // translate only lined up with the archway photo behind it at the ONE window
-        // width it was tuned against, and visibly drifted at any other width (this is
-        // exactly what moved between your localhost test and the real deployment).
-        // `fixed` instead anchors it to the viewport's own corner, the same coordinate
-        // system the fixed background photo already uses, so the two stay aligned
-        // across every window size without re-tuning. On mobile (below `lg`) this is
-        // plain static flow, same as before. right-[276px]/top-[400px] chosen by hand
-        // via the (now-removed) nudge arrows -- plain Tailwind arbitrary VALUES, not
-        // the arbitrary-PROPERTY `[right:var(--x)]` syntax that broke this project's
-        // CSS build when this was still adjustable.
-        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:fixed lg:right-[276px] lg:top-[400px] lg:h-[600px] lg:w-[420px]"
+        // Positioned relative to the page's own positioned ancestor (lg:absolute), not
+        // the viewport and not the flex layout. Two earlier versions each fixed one
+        // drift and reintroduced the other:
+        //   1. `transform: translate` relative to this panel's own in-flow flex
+        //      position drifted with the browser window's WIDTH (it sits right after a
+        //      `flex-1` sibling whose width is whatever's left over).
+        //   2. `position: fixed` anchored to the VIEWPORT fixed that, but `fixed`
+        //      ignores scrolling entirely -- the archway background behind it
+        //      (apps/web/src/app/try-on/live/page.tsx) is `position: absolute` inside
+        //      the page's normal flow, so it scrolls with the page while a `fixed`
+        //      panel stayed pinned to the viewport, drifting apart the moment the page
+        //      was taller than one screen (this is what moved on the real deployment).
+        // `absolute` resolves against the nearest positioned ancestor, which here is
+        // that same page's `relative z-10` wrapper around the whole header+content
+        // column -- a full-viewport-width box, so right-[276px]/top-[400px] still means
+        // the same visual offset from the viewport's corner at scroll position 0 as
+        // `fixed` did, but now the panel scrolls together with the background and
+        // catalogue instead of floating independently of them. On mobile (below `lg`)
+        // this is plain static flow, same as before.
+        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:absolute lg:right-[276px] lg:top-[400px] lg:h-[600px] lg:w-[420px]"
       >
         <h2 className="sr-only">On the model</h2>
         <BotPreview
