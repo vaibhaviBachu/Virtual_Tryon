@@ -153,12 +153,15 @@ export function LiveArStudio() {
   // the panel's className.
   const [panelRightPx, setPanelRightPx] = useState(276);
   const [panelTopPx, setPanelTopPx] = useState(400);
-  const [isLgUp, setIsLgUp] = useState(
-    () => typeof window.matchMedia === "function" && window.matchMedia("(min-width: 1024px)").matches
-  );
+  // Starts false on both server and client (matching the mobile/base layout) and is
+  // only corrected after mount -- `window` does not exist during server rendering, so
+  // reading it in a lazy useState initializer (which runs during SSR too) would crash
+  // the build; reading it here, inside an effect, never runs on the server.
+  const [isLgUp, setIsLgUp] = useState(false);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const query = window.matchMedia("(min-width: 1024px)");
+    setIsLgUp(query.matches);
     const listener = (e: MediaQueryListEvent) => setIsLgUp(e.matches);
     query.addEventListener("change", listener);
     return () => query.removeEventListener("change", listener);
