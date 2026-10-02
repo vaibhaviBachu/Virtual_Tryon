@@ -84,6 +84,18 @@ def live_ar_capture_key(session_id: uuid.UUID, mime_type: str) -> str:
     return f"live-ar/{session_id}/{filename}"
 
 
+def jewellery_ai_intake_key(intake_id: uuid.UUID, variant: str, mime_type: str) -> str:
+    """AI Jewellery Assistant intake artifacts (a customer's own uploaded photo plus
+    its AI-prepared derivatives, before any catalogue item exists yet) — own top-level
+    prefix, never `jewellery/` (that prefix is reserved for assets that already belong
+    to a real `Jewellery` row) and never `uploads/` (that one is Milestone 3's
+    try-on-photo namespace, a different retention/privacy story). `variant` is one of
+    "original" | "catalogue" | "thumbnail"."""
+    ext = sanitize_extension(extension_for_mime_type(mime_type))
+    filename = f"{uuid.uuid4()}.{ext}"
+    return f"jewellery-ai/{intake_id}/{variant}/{filename}"
+
+
 def tryon_render_debug_key(session_id: uuid.UUID, request_id: uuid.UUID) -> str:
     """Internal/developer-only debug visualization (spec §27) — same private prefix
     family as the result image, kept in its own `debug/` sub-path so it can never be

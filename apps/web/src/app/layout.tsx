@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { AssistantMount } from "@/components/jewellery-ai/AssistantMount";
 import { QueryProvider } from "@/components/providers/query-provider";
 
 import "./globals.css";
@@ -18,7 +19,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-50">
-        <QueryProvider>{children}</QueryProvider>
+        <QueryProvider>
+          {children}
+          <AssistantMount />
+        </QueryProvider>
       </body>
     </html>
   );

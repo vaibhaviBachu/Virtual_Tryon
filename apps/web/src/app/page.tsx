@@ -80,11 +80,24 @@ function prefersReducedMotion(): boolean {
  * the jsdom test environment). */
 function Reveal({ children, className = "", delayMs = 0 }: { children: React.ReactNode; className?: string; delayMs?: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+  // Must start false on BOTH server and client -- `typeof IntersectionObserver` is
+  // "undefined" during server rendering (Node has no such global) but "function" in
+  // every real browser, so using that check in a lazy useState initializer (which runs
+  // during the client's hydration render too) produced a genuine hydration mismatch:
+  // the server always rendered visible=true while the client always recomputed
+  // visible=false. Fixed by always starting false and only correcting it inside the
+  // effect below (which never runs during SSR), accepting the resulting
+  // react-hooks/set-state-in-effect lint note as the correct tradeoff here -- same
+  // pattern as `debugAllowed` elsewhere in this codebase.
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {

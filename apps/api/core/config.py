@@ -70,6 +70,31 @@ class Settings(BaseSettings):
     # normal customers (spec §27: "do not expose to normal customers").
     ENABLE_TRYON_DEBUG_VIZ: bool = Field(default=True)
 
+    # --- AI Jewellery Assistant ---
+    # Server-side only -- NEVER exposed to the frontend (no NEXT_PUBLIC_ equivalent of
+    # this exists anywhere, by design). Empty string (the default) means "not
+    # configured yet"; every call site must check for that and return a clean
+    # "AI service is not configured" response rather than attempting the network call
+    # with an empty key. The real key is added directly in Render/the local .env later
+    # -- never requested or hard-coded during implementation.
+    AI_API_KEY: str = Field(default="")
+    AI_IMAGE_PROVIDER: str = Field(default="openai")
+    AI_IMAGE_MODEL: str = Field(default="")
+    AI_TEXT_PROVIDER: str = Field(default="openai")
+    AI_TEXT_MODEL: str = Field(default="")
+    # Separate key (not AI_API_KEY) because this is a genuinely different provider with
+    # its own account/credentials -- set AI_IMAGE_PROVIDER/AI_TEXT_PROVIDER to "gemini"
+    # to actually use it (see ai/jewellery_assistant/providers/factory.py).
+    GEMINI_API_KEY: str = Field(default="")
+    # One upload should cost at most one image-generation call; this bounds explicit
+    # customer-initiated regenerations on top of that (spec: cost control).
+    AI_MAX_GENERATIONS_PER_ITEM: int = Field(default=3)
+    AI_MAX_UPLOAD_MB: int = Field(default=10)
+    # Requests per hour per client IP across the assistant's image/metadata/regenerate
+    # endpoints (apps/api/core/redis_client.py) -- the first rate-limiting code in this
+    # codebase; see apps/api/v1/services/jewellery_ai_service.py for where it's enforced.
+    AI_RATE_LIMIT_PER_HOUR: int = Field(default=20)
+
     @field_validator("ENVIRONMENT")
     @classmethod
     def _validate_environment(cls, value: str) -> str:

@@ -19,3 +19,8 @@ httpx==0.27.2
 fakeredis==2.24.1
 moto[s3]==5.0.13
 piexif==1.1.3
+# AI Jewellery Assistant: ai/jewellery_assistant/image_pipeline.py's
+# looks_like_isolated_product_photo() validation check (not used by any pre-existing
+# apps/api code -- workers/requirements.txt already pins this for mediapipe/rembg, this
+# is the same package for a much lighter use here).
+numpy>=1.24,<3

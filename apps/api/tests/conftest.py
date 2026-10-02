@@ -8,6 +8,13 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://postgres:postgres@lo
 os.environ.setdefault("REDIS_URL", "redis://localhost:2004/0")
 os.environ.setdefault("MINIO_ENDPOINT", "localhost:2005")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key")
+# Without these, pydantic-settings would read the real .env file's actual AI_API_KEY/
+# GEMINI_API_KEY (unprotected by any of the overrides above, which only cover the vars
+# already listed) and tests could silently start making real, billed AI provider calls
+# -- same hermeticity concern as DATABASE_URL etc. above, just for a newer settings
+# group.
+os.environ.setdefault("AI_API_KEY", "")
+os.environ.setdefault("GEMINI_API_KEY", "")
 
 import uuid
 
