@@ -80,15 +80,11 @@ function prefersReducedMotion(): boolean {
  * the jsdom test environment). */
 function Reveal({ children, className = "", delayMs = 0 }: { children: React.ReactNode; className?: string; delayMs?: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
 
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    if (typeof IntersectionObserver === "undefined") {
-      setVisible(true);
-      return;
-    }
+    if (!el || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -157,8 +153,18 @@ export default function LandingPage() {
       <div
         ref={bgRef}
         aria-hidden="true"
-        className="pointer-events-none fixed inset-0 -z-20 bg-cover bg-center"
-        style={{ backgroundImage: "url(/live-ar/landing-hero-bg.webp)", willChange: "transform" }}
+        className="pointer-events-none fixed inset-0 -z-20 bg-cover"
+        style={{
+          backgroundImage: "url(/live-ar/landing-hero-bg.webp)",
+          // The woman sits roughly 3/4 of the way across the photo and in its upper
+          // half -- plain `bg-center` crops a narrow/tall mobile viewport to the
+          // image's horizontal and vertical MIDDLE instead, which cuts her out
+          // entirely and leaves only plain wall visible (exactly what showed up on a
+          // phone-width screenshot). Biasing the position keeps her in frame at every
+          // viewport size, not just wide desktop ones where bg-cover barely crops.
+          backgroundPosition: "78% 20%",
+          willChange: "transform",
+        }}
       />
       {/* Cinematic readability overlay -- strongest where the hero text sits (left),
           fading out over the woman/mirror on the right so they stay visible, plus a

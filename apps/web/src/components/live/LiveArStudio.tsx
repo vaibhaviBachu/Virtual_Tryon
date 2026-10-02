@@ -834,8 +834,11 @@ export function LiveArStudio() {
         // `fixed` instead anchors it to the viewport's own corner, the same coordinate
         // system the fixed background photo already uses, so the two stay aligned
         // across every window size without re-tuning. On mobile (below `lg`) this is
-        // plain static flow, same as before.
-        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:fixed lg:right-24 lg:top-40 lg:h-[600px] lg:w-[420px]"
+        // plain static flow, same as before. right-[276px]/top-[400px] chosen by hand
+        // via the (now-removed) nudge arrows -- plain Tailwind arbitrary VALUES, not
+        // the arbitrary-PROPERTY `[right:var(--x)]` syntax that broke this project's
+        // CSS build when this was still adjustable.
+        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:fixed lg:right-[276px] lg:top-[400px] lg:h-[600px] lg:w-[420px]"
       >
         <h2 className="sr-only">On the model</h2>
         <BotPreview
