@@ -519,7 +519,7 @@ export function LiveArStudio() {
         </Card>
       </div>
 
-      {/* lg:pr reserves the same width the now lg:fixed model panel occupies (420px +
+      {/* lg:pr reserves the same width the now lg:absolute model panel occupies (420px +
           its 96px/right-24 offset from the viewport edge + a gap), since `fixed`
           removes it from this flex row entirely -- without this, the catalogue grid
           would spread under where the panel visually sits. */}
