@@ -1,0 +1,71 @@
+services:
+  - type: web
+    name: jewellery-tryon-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ENABLE_TRYON_DEBUG_VIZ
+        value: "false"
+      - key: MINIO_BUCKET
+        value: jewellery-tryon
+      - key: MINIO_SECURE
+        value: "true"
+      - key: MINIO_PUBLIC_SECURE
+        value: "true"
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: JWT_REFRESH_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+      # Secrets / per-environment values -- filled in via the Render dashboard, never
+      # committed here. See docs/deploy-render.md for where each one comes from.
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: MINIO_ENDPOINT
+        sync: false
+      - key: MINIO_PUBLIC_ENDPOINT
+        sync: false
+      - key: MINIO_ACCESS_KEY
+        sync: false
+      - key: MINIO_SECRET_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+
+  - type: worker
+    name: jewellery-tryon-worker
+    runtime: docker
+    dockerfilePath: ./workers/Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MINIO_BUCKET
+        value: jewellery-tryon
+      - key: MINIO_SECURE
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: MINIO_ENDPOINT
+        sync: false
+      - key: MINIO_ACCESS_KEY
+        sync: false
+      - key: MINIO_SECRET_KEY
+        sync: false
