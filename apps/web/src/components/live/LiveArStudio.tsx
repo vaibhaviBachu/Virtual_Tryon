@@ -146,6 +146,23 @@ export function LiveArStudio() {
   useEffect(() => {
     setDebugAllowed(new URLSearchParams(window.location.search).get("debug") === "1");
   }, []);
+  // Temporary calibration tool for the "on the model" panel's position (lg+ only) --
+  // same nudge-then-hardcode workflow used before for this same panel and the home
+  // page background. Remove this state, the matchMedia effect below, and the arrow
+  // box JSX once the final right/top values are confirmed and hardcoded back into
+  // the panel's className.
+  const [panelRightPx, setPanelRightPx] = useState(276);
+  const [panelTopPx, setPanelTopPx] = useState(400);
+  const [isLgUp, setIsLgUp] = useState(
+    () => typeof window.matchMedia === "function" && window.matchMedia("(min-width: 1024px)").matches
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(min-width: 1024px)");
+    const listener = (e: MediaQueryListEvent) => setIsLgUp(e.matches);
+    query.addEventListener("change", listener);
+    return () => query.removeEventListener("change", listener);
+  }, []);
   useEffect(() => {
     createTryOnSession({}).then((session) => setSessionId(session.id));
   }, []);
@@ -824,25 +841,12 @@ export function LiveArStudio() {
       {showPicker && (
       <div
         // Positioned relative to the page's own positioned ancestor (lg:absolute), not
-        // the viewport and not the flex layout. Two earlier versions each fixed one
-        // drift and reintroduced the other:
-        //   1. `transform: translate` relative to this panel's own in-flow flex
-        //      position drifted with the browser window's WIDTH (it sits right after a
-        //      `flex-1` sibling whose width is whatever's left over).
-        //   2. `position: fixed` anchored to the VIEWPORT fixed that, but `fixed`
-        //      ignores scrolling entirely -- the archway background behind it
-        //      (apps/web/src/app/try-on/live/page.tsx) is `position: absolute` inside
-        //      the page's normal flow, so it scrolls with the page while a `fixed`
-        //      panel stayed pinned to the viewport, drifting apart the moment the page
-        //      was taller than one screen (this is what moved on the real deployment).
-        // `absolute` resolves against the nearest positioned ancestor, which here is
-        // that same page's `relative z-10` wrapper around the whole header+content
-        // column -- a full-viewport-width box, so right-[276px]/top-[400px] still means
-        // the same visual offset from the viewport's corner at scroll position 0 as
-        // `fixed` did, but now the panel scrolls together with the background and
-        // catalogue instead of floating independently of them. On mobile (below `lg`)
-        // this is plain static flow, same as before.
-        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:absolute lg:right-[276px] lg:top-[400px] lg:h-[600px] lg:w-[420px]"
+        // the viewport and not the flex layout -- see the lg:absolute writeup this
+        // replaced for why. right/top are temporarily driven by panelRightPx/panelTopPx
+        // (below, via the nudge arrows) instead of hardcoded Tailwind values while this
+        // is being recalibrated directly against production.
+        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:absolute lg:h-[600px] lg:w-[420px]"
+        style={isLgUp ? { right: panelRightPx, top: panelTopPx } : undefined}
       >
         <h2 className="sr-only">On the model</h2>
         <BotPreview
@@ -877,6 +881,46 @@ export function LiveArStudio() {
           View on Model
         </span>
       </div>
+      )}
+
+      {/* Temporary calibration tool -- see the panelRightPx/panelTopPx/isLgUp state
+          above. Remove this whole block once the final position is confirmed. */}
+      {showPicker && (
+        <div className="fixed bottom-5 left-5 z-50 flex flex-col items-center gap-2 rounded-2xl bg-neutral-900/90 p-3 text-white shadow-lg">
+          <p className="text-xs">
+            right: {panelRightPx} top: {panelTopPx}
+          </p>
+          <button
+            type="button"
+            onClick={() => setPanelTopPx((v) => v - 10)}
+            className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
+          >
+            Up
+          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPanelRightPx((v) => v + 10)}
+              className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
+            >
+              Left
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanelRightPx((v) => v - 10)}
+              className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
+            >
+              Right
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPanelTopPx((v) => v + 10)}
+            className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
+          >
+            Down
+          </button>
+        </div>
       )}
     </div>
   );
