@@ -146,26 +146,6 @@ export function LiveArStudio() {
   useEffect(() => {
     setDebugAllowed(new URLSearchParams(window.location.search).get("debug") === "1");
   }, []);
-  // Temporary calibration tool for the "on the model" panel's position (lg+ only) --
-  // same nudge-then-hardcode workflow used before for this same panel and the home
-  // page background. Remove this state, the matchMedia effect below, and the arrow
-  // box JSX once the final right/top values are confirmed and hardcoded back into
-  // the panel's className.
-  const [panelRightPx, setPanelRightPx] = useState(276);
-  const [panelTopPx, setPanelTopPx] = useState(400);
-  // Starts false on both server and client (matching the mobile/base layout) and is
-  // only corrected after mount -- `window` does not exist during server rendering, so
-  // reading it in a lazy useState initializer (which runs during SSR too) would crash
-  // the build; reading it here, inside an effect, never runs on the server.
-  const [isLgUp, setIsLgUp] = useState(false);
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const query = window.matchMedia("(min-width: 1024px)");
-    setIsLgUp(query.matches);
-    const listener = (e: MediaQueryListEvent) => setIsLgUp(e.matches);
-    query.addEventListener("change", listener);
-    return () => query.removeEventListener("change", listener);
-  }, []);
   useEffect(() => {
     createTryOnSession({}).then((session) => setSessionId(session.id));
   }, []);
@@ -844,12 +824,11 @@ export function LiveArStudio() {
       {showPicker && (
       <div
         // Positioned relative to the page's own positioned ancestor (lg:absolute), not
-        // the viewport and not the flex layout -- see the lg:absolute writeup this
-        // replaced for why. right/top are temporarily driven by panelRightPx/panelTopPx
-        // (below, via the nudge arrows) instead of hardcoded Tailwind values while this
-        // is being recalibrated directly against production.
-        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:absolute lg:h-[600px] lg:w-[420px]"
-        style={isLgUp ? { right: panelRightPx, top: panelTopPx } : undefined}
+        // the viewport (which ignores scroll) and not the flex layout (which drifts
+        // with window width). right-[476px]/top-[670px] chosen by hand via the
+        // (now-removed) nudge arrows, recalibrated directly against production once
+        // real catalogue data made the page taller than the empty-state calibration.
+        className="relative w-full overflow-hidden rounded-[2rem] shadow-[0_8px_30px_-10px_rgba(0,0,0,0.15)] lg:absolute lg:right-[476px] lg:top-[670px] lg:h-[600px] lg:w-[420px]"
       >
         <h2 className="sr-only">On the model</h2>
         <BotPreview
@@ -884,46 +863,6 @@ export function LiveArStudio() {
           View on Model
         </span>
       </div>
-      )}
-
-      {/* Temporary calibration tool -- see the panelRightPx/panelTopPx/isLgUp state
-          above. Remove this whole block once the final position is confirmed. */}
-      {showPicker && (
-        <div className="fixed bottom-5 left-5 z-50 flex flex-col items-center gap-2 rounded-2xl bg-neutral-900/90 p-3 text-white shadow-lg">
-          <p className="text-xs">
-            right: {panelRightPx} top: {panelTopPx}
-          </p>
-          <button
-            type="button"
-            onClick={() => setPanelTopPx((v) => v - 10)}
-            className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
-          >
-            Up
-          </button>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setPanelRightPx((v) => v + 10)}
-              className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
-            >
-              Left
-            </button>
-            <button
-              type="button"
-              onClick={() => setPanelRightPx((v) => v - 10)}
-              className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
-            >
-              Right
-            </button>
-          </div>
-          <button
-            type="button"
-            onClick={() => setPanelTopPx((v) => v + 10)}
-            className="rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20"
-          >
-            Down
-          </button>
-        </div>
       )}
     </div>
   );
